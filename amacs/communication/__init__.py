@@ -7,10 +7,13 @@ with an append-only audit log so nothing is silently lost.
 
 from __future__ import annotations
 
+import logging
 import threading
 import time
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional
+
+logger = logging.getLogger("amacs.communication")
 
 
 @dataclass
@@ -52,14 +55,23 @@ class CommunicationBus:
             if overwritten and self._merge_strategy is not None:
                 value = self._merge_strategy(self._store[key], value)
             self._store[key] = value
-            self._log.append(
-                LogEntry(
-                    timestamp=time.time(),
-                    key=key,
-                    value=value,
-                    writer=writer,
-                    overwritten=overwritten,
-                )
+            entry = LogEntry(
+                timestamp=time.time(),
+                key=key,
+                value=value,
+                writer=writer,
+                overwritten=overwritten,
+            )
+            self._log.append(entry)
+            val_snippet = str(value).replace("\n", " ")
+            if len(val_snippet) > 100:
+                val_snippet = val_snippet[:97] + "..."
+            logger.info(
+                "[Bus Publish] writer='%s' key='%s'%s: %s",
+                writer,
+                key,
+                " (overwritten)" if overwritten else "",
+                val_snippet,
             )
             # notify subscribers
             for cb in self._subscribers.get(key, []):

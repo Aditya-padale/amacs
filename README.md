@@ -145,6 +145,35 @@ class DomainExpertAgent(BaseAgent):
 register_agent("domain_expert", DomainExpertAgent)
 ```
 
+### Inspecting Agent Responses & Inter-Agent Communication
+
+```python
+from amacs import amacs
+
+# Option 1: Live printing with verbose=True and returning details object
+@amacs(max_agents=4, verbose=True, return_details=True)
+def research_task(topic: str):
+    return f"Research topic: {topic}"
+
+result = research_task("Quantum Computing")
+
+# Access individual agent outputs
+for agent_res in result.agent_results:
+    print(f"[{agent_res.agent_name}] -> {agent_res.content}")
+
+# Access inter-agent pub/sub communication log
+for log in result.communication_log:
+    print(f"💬 [{log.writer}] published '{log.key}': {log.value}")
+
+# Pretty-print formatted reports
+result.print_agent_responses()
+result.print_communication_log()
+
+# Option 2: Inspect via wrapper attribute anytime
+print(research_task.last_result.agent_results)
+print(research_task.last_result.communication_log)
+```
+
 ---
 
 ## ⚙️ Configuration
@@ -161,6 +190,8 @@ register_agent("domain_expert", DomainExpertAgent)
 | `llm_provider`     | `str`   | `None`          | LLM provider (`"openai"`, `"anthropic"`, etc.) |
 | `llm_model`        | `str`   | `None`          | Model name (e.g. `"gpt-4o"`)                   |
 | `skip_non_critical`| `bool`  | `True`          | Skip failed non-critical sub-tasks             |
+| `verbose`          | `bool`  | `False`         | Print agent responses & bus communications live|
+| `return_details`   | `bool`  | `False`         | Return `AMACSResult` instead of plain string   |
 
 ### Environment Variables
 
@@ -192,6 +223,75 @@ Every `@amacs`-decorated call follows this pipeline:
 7. **Aggregator** — collects all successful sub-task outputs, runs a final Validator pass, and merges them into a single coherent result.
 
 ---
+
+## 🧠 Deep Dive: Responses, Aggregation, Adaptive Storage, Answer Selection & Validation
+
+### 1. 🤖 Agent Responses (`amacs/agents/`)
+Each agent inherits from `BaseAgent` and generates responses tailored to its role:
+
+* **`SearchAgent` (`agent_type="search"`)**: Retrieves factual information, citing source types (academic, news, industry) with bullet points and clear headings.
+* **`AnalysisAgent` (`agent_type="analysis"`)**: Interprets data, evaluates evidence quality, lists explicit assumptions, and quantifies confidence levels.
+* **`WriterAgent` (`agent_type="write"`)**: Synthesises research and analysis into cohesive, professional written content.
+* **`ValidatorAgent` (`agent_type="validate"`)**: Verifies facts, checks for internal contradictions, and generates either corrections or a quality confirmation.
+
+**Output Structure**: Every agent returns an `AgentResult` object containing:
+```python
+AgentResult(
+    sub_task_id="task_1",
+    agent_name="search",
+    content="...",                 # Textual response payload
+    success=True,                   # Status flag
+    error=None,                     # Error details if failed
+    latency_seconds=1.24,           # Execution time
+    token_usage={"total_tokens": 320},
+    metadata={}
+)
+```
+
+---
+
+### 2. 🧩 How Answers Are Combined (`amacs/aggregation/`)
+Result combination is handled by the `Aggregator` (`amacs/aggregation/__init__.py`):
+1. **Filtering**: Successful results (`result.success == True` and non-empty `content`) are extracted.
+2. **DAG Sequencing**: Outputs are sorted according to the original `SubTask` execution DAG sequence to preserve logical progression (Search → Analysis → Writer → Validator).
+3. **Joining**: Ordered content strings are joined with double line breaks (`"\n\n"`).
+4. **Final Synthesis Pass**: The merged text is passed to `ValidatorAgent` with full thread context snapshot from `CommunicationBus` to polish and eliminate inconsistencies.
+
+---
+
+### 3. 💾 Where Adaptive Answers & State Are Stored (`amacs/communication/` & `amacs/adaptive/`)
+AMACS stores intermediate states, metrics, and adaptive decisions across three specialized layers:
+
+* **Shared Execution Bus (`CommunicationBus`)**:
+  * **State Store** (`_store: Dict[str, Any]`): Holds published outputs mapped by `sub_task_id` and `"original_input"`.
+  * **Audit Log** (`_log: List[LogEntry]`): Append-only log recording timestamp, writer, value, and overwrite status for full auditability.
+* **Adaptive Monitor (`Monitor`)**:
+  * **`AgentMetrics`**: Real-time thread-safe metrics dictionary (`total_calls`, `failed_calls`, `total_latency`, `total_tokens`, `last_error`).
+  * **`SystemSnapshot`**: Captures system health snapshots across execution waves.
+* **Evaluation & Actions**:
+  * `Evaluator` produces an `EvaluationReport` flagging agent health (`HEALTHY`, `DEGRADED`, `FAILING`).
+  * `AdaptationEngine` translates flags into `AdaptationAction` directives (`SWAP_AGENT`, `SKIP_TASK`, `REDUCE_TEAM`).
+  * `Reconfigurator` logs execution results in `ReconfigurationResult`.
+
+---
+
+### 4. 🏆 How the Best Answer is Selected (`amacs/communication/` & `amacs/adaptive/`)
+Selection and optimization occur at three distinct levels:
+
+* **Conflict Resolution on Bus**: Last-write-wins by default when duplicate keys are published, or a custom `merge_strategy(old_value, new_value)` function passed to `CommunicationBus`. All overwrites are recorded in `get_conflicts()`.
+* **Dynamic Agent Selection & Swapping**: When `Evaluator` detects an underperforming or failing agent, `AdaptationEngine` triggers `SWAP_AGENT`. `Reconfigurator` dynamically swaps the failing agent with an alternative agent class from `_AGENT_REGISTRY` for remaining waves.
+* **Validator Synthesis**: `ValidatorAgent` cross-references all context stored in `CommunicationBus`, resolves remaining discrepancies, and yields the final best output.
+
+---
+
+### 5. 🛡️ How Validation Works (`amacs/agents/`, `amacs/orchestrator/`, `amacs/aggregation/`)
+Validation is enforced continuously throughout the execution lifecycle:
+
+1. **Retry Logic**: `BaseAgent` uses `tenacity` exponential backoff retries (`retry_limit`, default 3) on transient LLM/provider failures.
+2. **DAG Execution Integrity**: `Scheduler` tracks dependency waves and checks `SubTask.critical`. Critical failures raise `OrchestrationError` when `skip_non_critical=False`.
+3. **Adaptive Threshold Checks**: `Evaluator` compares execution performance against `ThresholdConfig` (`max_failures`, `max_latency_seconds`, `max_error_rate`).
+4. **Final Pass Validation**: `Aggregator._validate()` executes a final `ValidatorAgent` check over the merged payload to ensure factual consistency and quality before returning the result.
+
 
 ## 📦 Package Structure
 

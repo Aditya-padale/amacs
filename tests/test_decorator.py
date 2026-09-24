@@ -46,6 +46,33 @@ class TestDecoratorSync:
         result = hello()
         assert result  # non-empty
 
+    def test_decorator_last_result_and_verbose(self, capsys: pytest.CaptureFixture[str]) -> None:
+        @amacs(max_agents=2, verbose=True)
+        def inspectable_task(topic: str) -> str:
+            return f"Inspect {topic}"
+
+        res = inspectable_task("Quantum Computing")
+        assert isinstance(res, str)
+        assert inspectable_task.last_result is not None
+        assert len(inspectable_task.last_result.agent_results) > 0
+        assert len(inspectable_task.last_result.communication_log) > 0
+
+        captured = capsys.readouterr()
+        assert "Agent Response" in captured.out or "AGENT RESPONSES" in captured.out
+        assert "INTER-AGENT COMMUNICATION LOG" in captured.out
+
+    def test_decorator_return_details(self) -> None:
+        @amacs(max_agents=2, return_details=True)
+        def detailed_task(topic: str) -> str:
+            return f"Detailed {topic}"
+
+        res = detailed_task("GenAI")
+        assert hasattr(res, "agent_results")
+        assert hasattr(res, "communication_log")
+        assert len(res.agent_results) > 0
+        assert len(res.communication_log) > 0
+        assert str(res) == res.final_output
+
 
 class TestDecoratorAsync:
     """Async decorator tests."""
@@ -67,3 +94,17 @@ class TestDecoratorAsync:
             return "async"
 
         assert async_named.__name__ == "async_named"
+
+    @pytest.mark.asyncio
+    async def test_async_decorator_return_details(self) -> None:
+        @amacs(max_agents=2, return_details=True)
+        async def async_detailed(topic: str) -> str:
+            return f"Async {topic}"
+
+        res = await async_detailed("Deep Learning")
+        assert hasattr(res, "agent_results")
+        assert hasattr(res, "communication_log")
+        assert len(res.agent_results) > 0
+        assert len(res.communication_log) > 0
+        assert str(res) == res.final_output
+

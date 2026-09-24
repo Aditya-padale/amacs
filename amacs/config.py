@@ -44,6 +44,14 @@ class AMACSConfig(BaseModel):
         default=True,
         description="If True, a failed non-critical sub-task is skipped instead of crashing.",
     )
+    verbose: bool = Field(
+        default=False,
+        description="Log and print detailed agent responses and inter-agent communication.",
+    )
+    return_details: bool = Field(
+        default=False,
+        description="Return an AMACSResult object with full agent outputs and communication log.",
+    )
     extra: Dict[str, Any] = Field(
         default_factory=dict,
         description="Arbitrary extra parameters forwarded to agents and hooks.",

@@ -40,7 +40,8 @@ from amacs.integrations.llm_providers import (  # noqa: F401, E402
     Message,
     LLMResponse,
 )
-from amacs.communication import CommunicationBus  # noqa: F401, E402
+from amacs.communication import CommunicationBus, LogEntry  # noqa: F401, E402
+from amacs.results import AMACSResult  # noqa: F401, E402
 
 __all__ = [
     # Decorator
@@ -48,10 +49,13 @@ __all__ = [
     # Config
     "AMACSConfig",
     "Strategy",
+    # Results & Inspection
+    "AMACSResult",
+    "AgentResult",
+    "LogEntry",
+    "SubTask",
     # Agents
     "BaseAgent",
-    "SubTask",
-    "AgentResult",
     "register_agent",
     # LLM
     "get_provider",

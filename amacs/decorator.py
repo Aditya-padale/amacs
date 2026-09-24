@@ -27,6 +27,7 @@ from amacs.communication import CommunicationBus
 from amacs.config import AMACSConfig, build_config
 from amacs.exceptions import OrchestrationError
 from amacs.integrations.llm_providers import LLMProvider, get_provider
+from amacs.results import AMACSResult
 from amacs.orchestrator.agent_selector import AgentSelector
 from amacs.orchestrator.scheduler import Scheduler
 from amacs.orchestrator.task_analyzer import TaskAnalyzer
@@ -58,11 +59,15 @@ def amacs(**kwargs: Any) -> Callable[[F], F]:
         Model name (e.g. ``"gpt-4o"``).
     skip_non_critical : bool
         Skip failed non-critical sub-tasks instead of crashing (default ``True``).
+    verbose : bool
+        Log and print detailed agent responses and inter-agent communication (default ``False``).
+    return_details : bool
+        Return an ``AMACSResult`` container instead of just string (default ``False``).
 
     Returns
     -------
     Callable
-        The decorated function that transparently returns the aggregated result.
+        The decorated function that transparently returns the aggregated result or AMACSResult.
     """
     config = build_config(**kwargs)
 
@@ -70,14 +75,20 @@ def amacs(**kwargs: Any) -> Callable[[F], F]:
         if asyncio.iscoroutinefunction(func):
             @functools.wraps(func)
             async def async_wrapper(*args: Any, **kw: Any) -> Any:
-                return await _run_pipeline_async(func, args, kw, config)
+                res: AMACSResult = await _run_pipeline_async(func, args, kw, config)
+                async_wrapper.last_result = res  # type: ignore[attr-defined]
+                return res if config.return_details else res.final_output
 
+            async_wrapper.last_result = None  # type: ignore[attr-defined]
             return cast(F, async_wrapper)
         else:
             @functools.wraps(func)
             def sync_wrapper(*args: Any, **kw: Any) -> Any:
-                return _run_pipeline_sync(func, args, kw, config)
+                res: AMACSResult = _run_pipeline_sync(func, args, kw, config)
+                sync_wrapper.last_result = res  # type: ignore[attr-defined]
+                return res if config.return_details else res.final_output
 
+            sync_wrapper.last_result = None  # type: ignore[attr-defined]
             return cast(F, sync_wrapper)
 
     return decorator
@@ -128,24 +139,40 @@ def _run_pipeline_sync(
     reconfigurator = Reconfigurator(provider=provider, config=config) if config.adaptive else None
 
     def on_result(result: AgentResult) -> None:
-        if monitor is None:
-            return
-        if result.success:
-            monitor.record_success(
-                result.sub_task_id, result.agent_name,
-                result.latency_seconds,
-                result.token_usage.get("total_tokens", 0),
-            )
-        else:
-            monitor.record_failure(
-                result.sub_task_id, result.agent_name,
-                result.latency_seconds,
-                result.error or "unknown",
-            )
+        status_str = "SUCCESS" if result.success else f"FAILED ({result.error})"
+        logger.info(
+            "[Agent Response] agent='%s' sub_task='%s' status=%s: %.200s",
+            result.agent_name,
+            result.sub_task_id,
+            status_str,
+            result.content,
+        )
+        if config.verbose:
+            print(f"\n🤖 [Agent Response] Agent '{result.agent_name}' (task='{result.sub_task_id}') [{status_str}]:")
+            for line in result.content.splitlines():
+                print(f"   │ {line}")
+
+        if monitor is not None:
+            if result.success:
+                monitor.record_success(
+                    result.sub_task_id,
+                    result.agent_name,
+                    result.latency_seconds,
+                    result.token_usage.get("total_tokens", 0),
+                )
+            else:
+                monitor.record_failure(
+                    result.sub_task_id,
+                    result.agent_name,
+                    result.latency_seconds,
+                    result.error or "unknown",
+                )
 
     # 7. Execute
     results = scheduler.execute_sync(
-        plan, agents, bus,
+        plan,
+        agents,
+        bus,
         skip_non_critical=config.skip_non_critical,
         on_result=on_result,
     )
@@ -160,7 +187,21 @@ def _run_pipeline_sync(
 
     # 9. Aggregate
     aggregator = Aggregator(provider=provider, config=config)
-    return aggregator.aggregate(results, sub_tasks, bus)
+    final_output = aggregator.aggregate(results, sub_tasks, bus)
+
+    amacs_res = AMACSResult(
+        final_output=final_output,
+        agent_results=results,
+        communication_log=bus.get_log(),
+        sub_tasks=sub_tasks,
+        execution_plan=plan,
+        system_snapshot=monitor.snapshot() if monitor else None,
+    )
+
+    if config.verbose:
+        amacs_res.print_communication_log()
+
+    return amacs_res
 
 
 # ── Pipeline — async path ─────────────────────────────────────────────────
@@ -205,24 +246,40 @@ async def _run_pipeline_async(
     monitor = Monitor() if config.adaptive else None
 
     def on_result(result: AgentResult) -> None:
-        if monitor is None:
-            return
-        if result.success:
-            monitor.record_success(
-                result.sub_task_id, result.agent_name,
-                result.latency_seconds,
-                result.token_usage.get("total_tokens", 0),
-            )
-        else:
-            monitor.record_failure(
-                result.sub_task_id, result.agent_name,
-                result.latency_seconds,
-                result.error or "unknown",
-            )
+        status_str = "SUCCESS" if result.success else f"FAILED ({result.error})"
+        logger.info(
+            "[Agent Response] agent='%s' sub_task='%s' status=%s: %.200s",
+            result.agent_name,
+            result.sub_task_id,
+            status_str,
+            result.content,
+        )
+        if config.verbose:
+            print(f"\n🤖 [Agent Response] Agent '{result.agent_name}' (task='{result.sub_task_id}') [{status_str}]:")
+            for line in result.content.splitlines():
+                print(f"   │ {line}")
+
+        if monitor is not None:
+            if result.success:
+                monitor.record_success(
+                    result.sub_task_id,
+                    result.agent_name,
+                    result.latency_seconds,
+                    result.token_usage.get("total_tokens", 0),
+                )
+            else:
+                monitor.record_failure(
+                    result.sub_task_id,
+                    result.agent_name,
+                    result.latency_seconds,
+                    result.error or "unknown",
+                )
 
     # 7. Execute
     results = await scheduler.execute_async(
-        plan, agents, bus,
+        plan,
+        agents,
+        bus,
         skip_non_critical=config.skip_non_critical,
         on_result=on_result,
     )
@@ -240,4 +297,18 @@ async def _run_pipeline_async(
 
     # 9. Aggregate
     aggregator = Aggregator(provider=provider, config=config)
-    return aggregator.aggregate(results, sub_tasks, bus)
+    final_output = aggregator.aggregate(results, sub_tasks, bus)
+
+    amacs_res = AMACSResult(
+        final_output=final_output,
+        agent_results=results,
+        communication_log=bus.get_log(),
+        sub_tasks=sub_tasks,
+        execution_plan=plan,
+        system_snapshot=monitor.snapshot() if monitor else None,
+    )
+
+    if config.verbose:
+        amacs_res.print_communication_log()
+
+    return amacs_res
