@@ -1,0 +1,77 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "amacs"
+version = "0.1.0"
+description = "Adaptive Multi-Agent Coordination System — add multi-agent AI coordination to any function with a single decorator."
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.9"
+authors = [
+    { name = "AMACS Contributors" },
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Typing :: Typed",
+]
+keywords = ["multi-agent", "ai", "coordination", "decorator", "llm", "orchestration"]
+
+dependencies = [
+    "tenacity>=8.0",
+    "pydantic>=2.0",
+]
+
+[project.optional-dependencies]
+openai = ["openai>=1.0"]
+anthropic = ["anthropic>=0.20"]
+ollama = ["ollama>=0.1"]
+gemini = ["google-genai>=1.0"]
+pinecone = ["pinecone-client>=3.0"]
+faiss = ["faiss-cpu>=1.7"]
+monitoring = ["prometheus-client>=0.17"]
+all-llm = ["openai>=1.0", "anthropic>=0.20", "ollama>=0.1", "google-genai>=1.0"]
+dev = [
+    "pytest>=7.0",
+    "pytest-asyncio>=0.21",
+    "pytest-cov>=4.0",
+    "mypy>=1.0",
+    "ruff>=0.1",
+]
+
+[project.scripts]
+amacs = "amacs.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/amacs/amacs"
+Documentation = "https://amacs.readthedocs.io"
+Repository = "https://github.com/amacs/amacs"
+Issues = "https://github.com/amacs/amacs/issues"
+
+[tool.hatch.build.targets.wheel]
+packages = ["amacs"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+
+[tool.mypy]
+python_version = "3.9"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true
+
+[tool.ruff]
+target-version = "py39"
+line-length = 100
