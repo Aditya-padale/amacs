@@ -67,7 +67,7 @@ testpaths = ["tests"]
 asyncio_mode = "auto"
 
 [tool.mypy]
-python_version = "3.9"
+python_version = "3.10"
 warn_return_any = true
 warn_unused_configs = true
 disallow_untyped_defs = true
@@ -75,3 +75,11 @@ disallow_untyped_defs = true
 [tool.ruff]
 target-version = "py39"
 line-length = 100
+
+[tool.ruff.lint]
+ignore = [
+    "UP006", "UP007", "UP035", "UP045",  # Keep old typing for 3.9 compat
+    "RUF022",  # __all__ sorting is subjective
+    "PT011",   # pytest.raises too broad is fine for config tests
+    "BLE001",  # blind exception catch is intentional in providers
+]

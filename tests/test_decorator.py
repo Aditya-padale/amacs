@@ -2,11 +2,9 @@
 
 from __future__ import annotations
 
-import asyncio
 import pytest
 
 from amacs import amacs
-from amacs.config import Strategy
 
 
 class TestDecoratorSync:

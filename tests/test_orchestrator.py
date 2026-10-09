@@ -4,16 +4,16 @@ from __future__ import annotations
 
 import pytest
 
+from amacs.agents.analysis_agent import AnalysisAgent
 from amacs.agents.base_agent import SubTask
+from amacs.agents.search_agent import SearchAgent
+from amacs.agents.validator_agent import ValidatorAgent
+from amacs.agents.writer_agent import WriterAgent
+from amacs.exceptions import OrchestrationError
+from amacs.orchestrator.agent_selector import _AGENT_REGISTRY, AgentSelector, register_agent
+from amacs.orchestrator.scheduler import Scheduler
 from amacs.orchestrator.task_analyzer import TaskAnalyzer, TaskProfile
 from amacs.orchestrator.task_decomposer import TaskDecomposer
-from amacs.orchestrator.agent_selector import AgentSelector, register_agent, _AGENT_REGISTRY
-from amacs.orchestrator.scheduler import Scheduler, ExecutionPlan
-from amacs.agents.search_agent import SearchAgent
-from amacs.agents.analysis_agent import AnalysisAgent
-from amacs.agents.writer_agent import WriterAgent
-from amacs.agents.validator_agent import ValidatorAgent
-from amacs.exceptions import OrchestrationError
 
 
 class TestTaskAnalyzer:

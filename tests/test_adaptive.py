@@ -2,11 +2,9 @@
 
 from __future__ import annotations
 
-import pytest
-
-from amacs.adaptive.monitor import Monitor
-from amacs.adaptive.evaluator import Evaluator, HealthStatus, ThresholdConfig
 from amacs.adaptive.adaptation_engine import ActionType, AdaptationEngine
+from amacs.adaptive.evaluator import Evaluator, HealthStatus, ThresholdConfig
+from amacs.adaptive.monitor import Monitor
 from amacs.adaptive.reconfigurator import Reconfigurator
 from amacs.agents.base_agent import SubTask
 from amacs.agents.search_agent import SearchAgent

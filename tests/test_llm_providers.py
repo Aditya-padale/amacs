@@ -4,13 +4,13 @@ from __future__ import annotations
 
 import pytest
 
+from amacs.exceptions import LLMProviderError
 from amacs.integrations.llm_providers import (
     LLMResponse,
     Message,
     StubProvider,
     get_provider,
 )
-from amacs.exceptions import LLMProviderError
 
 
 class TestStubProvider:

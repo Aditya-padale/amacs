@@ -16,14 +16,14 @@ result aggregation behind the scenes.
 ## ✨ Features
 
 - **Single-decorator API** — wrap any sync or async function with `@amacs(...)`
-- **Automatic orchestration** — task analysis → decomposition → agent selection → scheduling → execution → aggregation
-- **4 built-in agents** — Search, Analysis, Writer, Validator (all LLM-powered)
-- **Adaptive control loop** — real-time monitoring with automatic agent swapping and task skipping
-- **Multi-provider LLM support** — OpenAI, Anthropic, Ollama (local), with a common interface
-- **Communication bus** — in-memory pub/sub for inter-agent knowledge sharing
-- **Configurable strategies** — optimize for `performance`, `cost`, or `speed`
-- **Extensible** — register custom agents, LLM providers, and merge strategies
-- **Production-ready** — retry logic (tenacity), graceful degradation, optional Prometheus metrics
+- **Real-Time Inter-Wave Adaptation** — `WaveExecutor` monitors and adapts execution plan between task waves before subsequent waves run
+- **Token & Budget Control** — token-aware prompt context budgeting (`ContextBuilder`) and hard token/cost budget limits (`max_cost_usd`, `max_total_tokens`)
+- **Strategy-Driven Execution** — `StrategyPolicy` dynamically maps strategies (`performance`, `cost`, `speed`) to models and concurrency rules
+- **Tool System** — agents execute tools (`WebSearchTool`, `PythonCalcTool`, `VectorSearchTool`) via `ToolRegistry`
+- **Genuine Multi-Agent Protocols** — `DebateCoordinator` (proposer-critic consensus) and `ManagerWorkerCoordinator` (hierarchical delegation)
+- **Dynamic LLM Task Decomposition** — `LLMTaskDecomposer` generates structured sub-task DAGs via LLMs
+- **Multi-Provider LLM Support** — OpenAI, Anthropic, Gemini, and Ollama (local) with uniform interface
+- **Telemetry & Benchmarking** — built-in execution tracing (`Tracer`), response caching (`ResponseCache`), and `amacs benchmark` CLI
 
 ---
 
@@ -35,10 +35,10 @@ result aggregation behind the scenes.
 │   (auto-detects sync/async, manages full pipeline)   │
 ├──────────────────────────────────────────────────────┤
 │                                                      │
-│  ┌────────────┐  ┌──────────────┐  ┌──────────────┐ │
-│  │   Task     │→ │    Task      │→ │   Agent      │ │
-│  │  Analyzer  │  │  Decomposer  │  │  Selector    │ │
-│  └────────────┘  └──────────────┘  └──────────────┘ │
+│  ┌────────────┐  ┌──────────────┐  ┌──────────────┐  │
+│  │   Task     │→ │    Task      │→ │   Agent      │  │
+│  │  Analyzer  │  │  Decomposer  │  │  Selector    │  │
+│  └────────────┘  └──────────────┘  └──────────────┘  │
 │         │               │                │           │
 │         ▼               ▼                ▼           │
 │  ┌─────────────────────────────────────────────────┐ │
@@ -47,10 +47,10 @@ result aggregation behind the scenes.
 │  └─────────────────────────────────────────────────┘ │
 │         │                                            │
 │         ▼                                            │
-│  ┌──────────┐ ┌──────────┐ ┌────────┐ ┌──────────┐ │
-│  │  Search  │ │ Analysis │ │ Writer │ │Validator │ │
-│  │  Agent   │ │  Agent   │ │ Agent  │ │  Agent   │ │
-│  └──────────┘ └──────────┘ └────────┘ └──────────┘ │
+│  ┌──────────┐ ┌──────────┐ ┌────────┐ ┌──────────┐   │
+│  │  Search  │ │ Analysis │ │ Writer │ │Validator │   │
+│  │  Agent   │ │  Agent   │ │ Agent  │ │  Agent   │   │
+│  └──────────┘ └──────────┘ └────────┘ └──────────┘   │
 │         │           │           │           │        │
 │         ▼           ▼           ▼           ▼        │
 │  ┌─────────────────────────────────────────────────┐ │

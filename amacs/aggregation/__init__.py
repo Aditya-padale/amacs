@@ -7,9 +7,9 @@ coherent result that the ``@amacs`` decorator returns to the caller.
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Dict, List, Optional
 
-from amacs.agents.base_agent import AgentResult, BaseAgent, SubTask
+from amacs.agents.base_agent import AgentResult, SubTask
 from amacs.agents.validator_agent import ValidatorAgent
 from amacs.communication import CommunicationBus
 from amacs.config import AMACSConfig
@@ -44,7 +44,7 @@ class Aggregator:
         3. Run a Validator pass for final consistency.
         4. Merge into a single output.
         """
-        task_map = {st.id: st for st in sub_tasks}
+
         success_map: Dict[str, AgentResult] = {}
         for r in results:
             if r.success and r.content:
@@ -61,16 +61,18 @@ class Aggregator:
 
         merged = "\n\n".join(ordered_contents)
 
-        # Final validation pass
+        # Final validation pass (non-destructive)
         try:
-            merged = self._validate(merged, bus)
+            validated = self._validate(merged, bus)
+            if validated and validated.strip():
+                merged = validated
         except Exception as exc:
             logger.warning("Final validation failed (using unvalidated merge): %s", exc)
 
         return merged
 
     def _validate(self, content: str, bus: CommunicationBus) -> str:
-        """Run the Validator agent on the merged content."""
+        """Run the Validator agent on the merged content non-destructively."""
         validator = ValidatorAgent(provider=self._provider, config=self._config)
 
         validation_task = SubTask(
@@ -88,7 +90,8 @@ class Aggregator:
         context = bus.snapshot()
         context["aggregated_content"] = content
 
-        result = validator.run(validation_task, context, bus)
-        if result.success and result.content:
+        # Run validator without writing back to the communication bus
+        result = validator.run(validation_task, context, bus=None)
+        if result.success and result.content and result.content.strip():
             return result.content
         return content

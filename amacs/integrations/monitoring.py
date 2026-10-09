@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Optional
+from typing import Any
 
 from amacs.exceptions import AMACSError
 
@@ -10,7 +10,7 @@ from amacs.exceptions import AMACSError
 _METRICS_AVAILABLE = False
 
 try:
-    from prometheus_client import Counter, Histogram, Gauge  # type: ignore[import-untyped]
+    from prometheus_client import Counter, Gauge, Histogram  # type: ignore[import-untyped]
 
     _METRICS_AVAILABLE = True
 

@@ -10,7 +10,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Dict, List, Optional
 
-from amacs.adaptive.monitor import AgentMetrics, Monitor, SystemSnapshot
+from amacs.adaptive.monitor import AgentMetrics, Monitor
 
 
 class HealthStatus(str, Enum):

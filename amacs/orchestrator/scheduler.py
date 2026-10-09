@@ -45,9 +45,12 @@ class Scheduler:
         dependents: Dict[str, List[str]] = defaultdict(list)
         for st in sub_tasks:
             for dep in st.dependencies:
-                if dep in task_map:
-                    in_degree[st.id] += 1
-                    dependents[dep].append(st.id)
+                if dep not in task_map:
+                    raise OrchestrationError(
+                        f"SubTask '{st.id}' references unknown dependency '{dep}'"
+                    )
+                in_degree[st.id] += 1
+                dependents[dep].append(st.id)
 
         waves: List[List[SubTask]] = []
         remaining: Set[str] = set(task_map.keys())
@@ -117,8 +120,8 @@ class Scheduler:
             # Check for critical failures
             for r in wave_results:
                 if not r.success:
-                    st = next((s for s in wave if s.id == r.sub_task_id), None)
-                    if st and st.critical and not skip_non_critical:
+                    st_obj = next((s for s in wave if s.id == r.sub_task_id), None)
+                    if st_obj and st_obj.critical and not skip_non_critical:
                         raise OrchestrationError(
                             f"Critical sub-task '{r.sub_task_id}' failed: {r.error}"
                         )

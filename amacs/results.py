@@ -10,6 +10,17 @@ from amacs.communication import LogEntry
 
 
 @dataclass
+class AdaptationEvent:
+    """Record of an adaptation action applied during execution."""
+
+    wave_index: int
+    action_type: str
+    target_agent_id: str
+    description: str
+    details: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass
 class AMACSResult:
     """Full execution container exposing agent responses and inter-agent communication."""
 
@@ -19,6 +30,7 @@ class AMACSResult:
     sub_tasks: List[SubTask] = field(default_factory=list)
     execution_plan: Optional[Any] = None
     system_snapshot: Optional[Any] = None
+    adaptation_events: List[AdaptationEvent] = field(default_factory=list)
 
     def __str__(self) -> str:
         return self.final_output

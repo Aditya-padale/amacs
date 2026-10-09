@@ -11,7 +11,6 @@ from typing import Any, Dict, List
 from amacs.agents.base_agent import SubTask
 from amacs.orchestrator.task_analyzer import TaskProfile
 
-
 # ── Domain → sub-task templates ───────────────────────────────────────────
 
 _TEMPLATES: Dict[str, List[Dict[str, Any]]] = {
@@ -78,20 +77,23 @@ _TEMPLATES: Dict[str, List[Dict[str, Any]]] = {
 }
 
 
+import copy
+
+
 class TaskDecomposer:
     """Splits a :class:`TaskProfile` into an ordered list of :class:`SubTask` objects."""
 
     def decompose(self, profile: TaskProfile) -> List[SubTask]:
         """Return sub-tasks as a simple DAG (list with dependency IDs)."""
-        template = _TEMPLATES.get(profile.domain, _TEMPLATES["general"])
+        raw_template = _TEMPLATES.get(profile.domain, _TEMPLATES["general"])
+        # Deep copy to avoid mutating module-level templates
+        template = copy.deepcopy(raw_template)
 
         # Trim or extend based on estimated sub-task count
         target = profile.estimated_sub_tasks
         if target < len(template):
-            # keep first N, but always keep the last one if it's validate
             template = template[:target]
         elif target > len(template) and profile.secondary_domains:
-            # add extra search/analyze steps for secondary domains
             for sd in profile.secondary_domains[: target - len(template)]:
                 extra = {
                     "label": "search",
@@ -99,22 +101,36 @@ class TaskDecomposer:
                     "deps": [],
                     "critical": False,
                 }
-                template.insert(1, extra)  # after the first search
+                template.insert(1, extra)
 
         sub_tasks: List[SubTask] = []
+        task_ids: List[str] = [f"{tmpl['label']}_{idx}" for idx, tmpl in enumerate(template)]
+        valid_id_set: set[str] = set(task_ids)
+
         for idx, tmpl in enumerate(template):
-            task_id = f"{tmpl['label']}_{idx}"
-            # Enrich description with the profile's arg summary
+            task_id = task_ids[idx]
             desc = tmpl["desc"]
             if profile.arg_summary:
                 desc = f"{desc} (context: {profile.arg_summary})"
+
+            # Sanitize and validate dependencies
+            raw_deps = tmpl.get("deps", [])
+            valid_deps: List[str] = []
+            for dep in raw_deps:
+                if dep in valid_id_set and dep != task_id:
+                    valid_deps.append(dep)
+
+            # If a dependency reference was broken by trimming/expansion and we are not step 0,
+            # fall back to depending on the immediately preceding task
+            if raw_deps and not valid_deps and idx > 0:
+                valid_deps.append(task_ids[idx - 1])
 
             sub_tasks.append(
                 SubTask(
                     id=task_id,
                     label=tmpl["label"],
                     description=desc,
-                    dependencies=tmpl["deps"],
+                    dependencies=valid_deps,
                     critical=tmpl["critical"],
                 )
             )

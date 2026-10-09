@@ -1,21 +1,21 @@
 """Orchestrator sub-package — task analysis, decomposition, agent selection, scheduling."""
 
-from amacs.orchestrator.task_analyzer import TaskAnalyzer, TaskProfile  # noqa: F401
-from amacs.orchestrator.task_decomposer import TaskDecomposer  # noqa: F401
-from amacs.orchestrator.agent_selector import (  # noqa: F401
+from amacs.orchestrator.agent_selector import (
     AgentSelector,
-    register_agent,
     get_registered_agents,
+    register_agent,
 )
-from amacs.orchestrator.scheduler import ExecutionPlan, Scheduler  # noqa: F401
+from amacs.orchestrator.scheduler import ExecutionPlan, Scheduler
+from amacs.orchestrator.task_analyzer import TaskAnalyzer, TaskProfile
+from amacs.orchestrator.task_decomposer import TaskDecomposer
 
 __all__ = [
-    "TaskAnalyzer",
-    "TaskProfile",
-    "TaskDecomposer",
     "AgentSelector",
-    "register_agent",
-    "get_registered_agents",
     "ExecutionPlan",
     "Scheduler",
+    "TaskAnalyzer",
+    "TaskDecomposer",
+    "TaskProfile",
+    "get_registered_agents",
+    "register_agent",
 ]

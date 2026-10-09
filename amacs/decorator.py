@@ -13,25 +13,24 @@ from __future__ import annotations
 
 import asyncio
 import functools
-import inspect
 import logging
 from typing import Any, Callable, TypeVar, cast
 
 from amacs.adaptive.adaptation_engine import AdaptationEngine
-from amacs.adaptive.evaluator import Evaluator, ThresholdConfig
+from amacs.adaptive.evaluator import Evaluator
 from amacs.adaptive.monitor import Monitor
 from amacs.adaptive.reconfigurator import Reconfigurator
-from amacs.aggregation import Aggregator
 from amacs.agents.base_agent import AgentResult
+from amacs.aggregation import Aggregator
 from amacs.communication import CommunicationBus
 from amacs.config import AMACSConfig, build_config
-from amacs.exceptions import OrchestrationError
-from amacs.integrations.llm_providers import LLMProvider, get_provider
-from amacs.results import AMACSResult
+from amacs.executor import WaveExecutor
+from amacs.integrations.llm_providers import get_provider
 from amacs.orchestrator.agent_selector import AgentSelector
 from amacs.orchestrator.scheduler import Scheduler
 from amacs.orchestrator.task_analyzer import TaskAnalyzer
 from amacs.orchestrator.task_decomposer import TaskDecomposer
+from amacs.results import AMACSResult
 
 logger = logging.getLogger("amacs.decorator")
 
@@ -96,6 +95,7 @@ def amacs(**kwargs: Any) -> Callable[[F], F]:
 
 # ── Pipeline — sync path ──────────────────────────────────────────────────
 
+
 def _run_pipeline_sync(
     func: Callable[..., Any],
     args: tuple[Any, ...],
@@ -132,11 +132,19 @@ def _run_pipeline_sync(
     original_result = func(*args, **kwargs)
     bus.publish("original_input", str(original_result), writer="decorator")
 
-    # 6. Adaptive control (optional)
+    # 6. Adaptive control & executor setup
     monitor = Monitor() if config.adaptive else None
     evaluator = Evaluator() if config.adaptive else None
     engine = AdaptationEngine() if config.adaptive else None
     reconfigurator = Reconfigurator(provider=provider, config=config) if config.adaptive else None
+
+    wave_executor = WaveExecutor(
+        config=config,
+        monitor=monitor,
+        evaluator=evaluator,
+        engine=engine,
+        reconfigurator=reconfigurator,
+    )
 
     def on_result(result: AgentResult) -> None:
         status_str = "SUCCESS" if result.success else f"FAILED ({result.error})"
@@ -152,40 +160,15 @@ def _run_pipeline_sync(
             for line in result.content.splitlines():
                 print(f"   │ {line}")
 
-        if monitor is not None:
-            if result.success:
-                monitor.record_success(
-                    result.sub_task_id,
-                    result.agent_name,
-                    result.latency_seconds,
-                    result.token_usage.get("total_tokens", 0),
-                )
-            else:
-                monitor.record_failure(
-                    result.sub_task_id,
-                    result.agent_name,
-                    result.latency_seconds,
-                    result.error or "unknown",
-                )
-
-    # 7. Execute
-    results = scheduler.execute_sync(
+    # 7. Execute with inter-wave adaptation
+    results = wave_executor.execute_sync(
         plan,
         agents,
         bus,
-        skip_non_critical=config.skip_non_critical,
         on_result=on_result,
     )
 
-    # 8. Adaptive reconfiguration (check after execution)
-    if config.adaptive and monitor and evaluator and engine and reconfigurator:
-        report = evaluator.evaluate(monitor)
-        if not report.system_healthy:
-            actions = engine.decide(report, total_agents=len(agents))
-            reconfigurator.apply(actions, agents, plan)
-            logger.info("Adaptive reconfiguration applied")
-
-    # 9. Aggregate
+    # 8. Aggregate
     aggregator = Aggregator(provider=provider, config=config)
     final_output = aggregator.aggregate(results, sub_tasks, bus)
 
@@ -196,6 +179,7 @@ def _run_pipeline_sync(
         sub_tasks=sub_tasks,
         execution_plan=plan,
         system_snapshot=monitor.snapshot() if monitor else None,
+        adaptation_events=wave_executor.adaptation_events,
     )
 
     if config.verbose:
@@ -242,8 +226,19 @@ async def _run_pipeline_async(
     original_result = await func(*args, **kwargs)
     bus.publish("original_input", str(original_result), writer="decorator")
 
-    # 6. Adaptive control (optional)
+    # 6. Adaptive control & executor setup
     monitor = Monitor() if config.adaptive else None
+    evaluator = Evaluator() if config.adaptive else None
+    engine = AdaptationEngine() if config.adaptive else None
+    reconfigurator = Reconfigurator(provider=provider, config=config) if config.adaptive else None
+
+    wave_executor = WaveExecutor(
+        config=config,
+        monitor=monitor,
+        evaluator=evaluator,
+        engine=engine,
+        reconfigurator=reconfigurator,
+    )
 
     def on_result(result: AgentResult) -> None:
         status_str = "SUCCESS" if result.success else f"FAILED ({result.error})"
@@ -259,43 +254,15 @@ async def _run_pipeline_async(
             for line in result.content.splitlines():
                 print(f"   │ {line}")
 
-        if monitor is not None:
-            if result.success:
-                monitor.record_success(
-                    result.sub_task_id,
-                    result.agent_name,
-                    result.latency_seconds,
-                    result.token_usage.get("total_tokens", 0),
-                )
-            else:
-                monitor.record_failure(
-                    result.sub_task_id,
-                    result.agent_name,
-                    result.latency_seconds,
-                    result.error or "unknown",
-                )
-
-    # 7. Execute
-    results = await scheduler.execute_async(
+    # 7. Execute with inter-wave adaptation
+    results = await wave_executor.execute_async(
         plan,
         agents,
         bus,
-        skip_non_critical=config.skip_non_critical,
         on_result=on_result,
     )
 
-    # 8. Adaptive reconfiguration
-    if config.adaptive and monitor:
-        evaluator = Evaluator()
-        report = evaluator.evaluate(monitor)
-        if not report.system_healthy:
-            engine = AdaptationEngine()
-            actions = engine.decide(report, total_agents=len(agents))
-            reconfigurator = Reconfigurator(provider=provider, config=config)
-            reconfigurator.apply(actions, agents, plan)
-            logger.info("Adaptive reconfiguration applied")
-
-    # 9. Aggregate
+    # 8. Aggregate
     aggregator = Aggregator(provider=provider, config=config)
     final_output = aggregator.aggregate(results, sub_tasks, bus)
 
@@ -306,6 +273,7 @@ async def _run_pipeline_async(
         sub_tasks=sub_tasks,
         execution_plan=plan,
         system_snapshot=monitor.snapshot() if monitor else None,
+        adaptation_events=wave_executor.adaptation_events,
     )
 
     if config.verbose:

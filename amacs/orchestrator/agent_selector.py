@@ -6,17 +6,15 @@ via ``amacs.register_agent(name, agent_class)``.
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional, Type
+from typing import Dict, List, Optional, Type
 
+from amacs.agents.analysis_agent import AnalysisAgent
 from amacs.agents.base_agent import BaseAgent, SubTask
 from amacs.agents.search_agent import SearchAgent
-from amacs.agents.analysis_agent import AnalysisAgent
-from amacs.agents.writer_agent import WriterAgent
 from amacs.agents.validator_agent import ValidatorAgent
+from amacs.agents.writer_agent import WriterAgent
 from amacs.config import AMACSConfig
-from amacs.exceptions import ConfigurationError
 from amacs.integrations.llm_providers import LLMProvider
-
 
 # ── Global registry ──────────────────────────────────────────────────────
 
@@ -39,6 +37,17 @@ def register_agent(name: str, agent_class: Type[BaseAgent]) -> None:
 def get_registered_agents() -> Dict[str, Type[BaseAgent]]:
     """Return a copy of the current agent registry."""
     return dict(_AGENT_REGISTRY)
+
+
+def get_alternative_agent_classes(current_type: str) -> List[Type[BaseAgent]]:
+    """Return registered agent classes excluding the given current type."""
+    alternatives: List[Type[BaseAgent]] = []
+    seen: set[Type[BaseAgent]] = set()
+    for name, cls in _AGENT_REGISTRY.items():
+        if name.lower() != current_type.lower() and cls not in seen:
+            seen.add(cls)
+            alternatives.append(cls)
+    return alternatives
 
 
 # ── Selector ──────────────────────────────────────────────────────────────

@@ -9,16 +9,29 @@ from typing import Any, Dict, Optional
 
 from tenacity import (
     retry,
-    retry_if_exception_type,
+    retry_if_exception,
     stop_after_attempt,
     wait_exponential,
 )
 
 from amacs.communication import CommunicationBus
 from amacs.config import AMACSConfig
-from amacs.exceptions import AgentError, LLMProviderError, RetryExhaustedError
+from amacs.context_builder import ContextBuilder
+from amacs.exceptions import (
+    RETRYABLE_ERRORS,
+    LLMProviderError,
+    RetryExhaustedError,
+    is_retryable_provider_error,
+)
 from amacs.integrations.llm_providers import LLMProvider, LLMResponse, Message, get_provider
 from amacs.integrations.monitoring import MetricsRecorder
+
+
+def _should_retry_exception(exc: BaseException) -> bool:
+    """Predicate for retry logic to check if an exception is retryable."""
+    if isinstance(exc, LLMProviderError):
+        return is_retryable_provider_error(exc)
+    return isinstance(exc, RETRYABLE_ERRORS)
 
 
 @dataclass
@@ -82,10 +95,11 @@ class BaseAgent(ABC):
         """
         parts = [f"Task: {sub_task.description}"]
         if context:
-            prior = "\n".join(f"- {k}: {v}" for k, v in context.items() if k != sub_task.id)
-            if prior:
-                parts.append(f"\nPrior context:\n{prior}")
-        return "\n".join(parts)
+            builder = ContextBuilder()
+            ctx_str = builder.build_context_string(context, exclude_key=sub_task.id)
+            if ctx_str:
+                parts.append(ctx_str)
+        return "\n\n".join(parts)
 
     # ── Public API ────────────────────────────────────────────────────
 
@@ -171,8 +185,19 @@ class BaseAgent(ABC):
             Message(role="system", content=self.system_prompt()),
             Message(role="user", content=self.build_user_prompt(sub_task, context)),
         ]
-        model = self._config.llm_model if self._config else None
-        resp: LLMResponse = self._provider.chat(messages, model=model)
+        from amacs.strategy import StrategyPolicy
+
+        model = (
+            StrategyPolicy.resolve_model(
+                self._config.strategy.value,
+                self._provider.name(),
+                self._config.llm_model,
+            )
+            if self._config
+            else None
+        )
+        timeout = self._config.timeout if self._config else None
+        resp: LLMResponse = self._provider.chat(messages, model=model, timeout=timeout)
         return AgentResult(
             sub_task_id=sub_task.id,
             agent_name=self.agent_type,
@@ -186,8 +211,19 @@ class BaseAgent(ABC):
             Message(role="system", content=self.system_prompt()),
             Message(role="user", content=self.build_user_prompt(sub_task, context)),
         ]
-        model = self._config.llm_model if self._config else None
-        resp: LLMResponse = await self._provider.achat(messages, model=model)
+        from amacs.strategy import StrategyPolicy
+
+        model = (
+            StrategyPolicy.resolve_model(
+                self._config.strategy.value,
+                self._provider.name(),
+                self._config.llm_model,
+            )
+            if self._config
+            else None
+        )
+        timeout = self._config.timeout if self._config else None
+        resp: LLMResponse = await self._provider.achat(messages, model=model, timeout=timeout)
         return AgentResult(
             sub_task_id=sub_task.id,
             agent_name=self.agent_type,
@@ -200,7 +236,7 @@ class BaseAgent(ABC):
         self, sub_task: SubTask, context: Dict[str, Any], max_attempts: int
     ) -> AgentResult:
         @retry(
-            retry=retry_if_exception_type((LLMProviderError, AgentError)),
+            retry=retry_if_exception(_should_retry_exception),
             stop=stop_after_attempt(max(max_attempts, 1)),
             wait=wait_exponential(multiplier=0.5, min=0.5, max=10),
             reraise=True,
@@ -211,6 +247,8 @@ class BaseAgent(ABC):
         try:
             return _inner()
         except Exception as exc:
+            if not _should_retry_exception(exc):
+                raise
             raise RetryExhaustedError(
                 f"Agent '{self.agent_type}' exhausted {max_attempts} retries: {exc}"
             ) from exc
@@ -218,15 +256,15 @@ class BaseAgent(ABC):
     async def _arun_with_retry(
         self, sub_task: SubTask, context: Dict[str, Any], max_attempts: int
     ) -> AgentResult:
-        # tenacity's @retry works with sync only; manual async retry loop
         last_exc: Optional[Exception] = None
         for attempt in range(max(max_attempts, 1)):
             try:
                 return await self._acall_llm(sub_task, context)
-            except (LLMProviderError, AgentError) as exc:
+            except Exception as exc:
                 last_exc = exc
+                if not _should_retry_exception(exc):
+                    raise
                 import asyncio
-
                 await asyncio.sleep(min(0.5 * (2**attempt), 10))
         raise RetryExhaustedError(
             f"Agent '{self.agent_type}' exhausted {max_attempts} async retries: {last_exc}"

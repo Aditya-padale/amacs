@@ -7,13 +7,13 @@ from the execution plan based on :class:`AdaptationAction` directives.
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, List, Optional, Type
+from typing import Dict, List, Optional
 
 from amacs.adaptive.adaptation_engine import ActionType, AdaptationAction
 from amacs.agents.base_agent import BaseAgent, SubTask
 from amacs.config import AMACSConfig
 from amacs.integrations.llm_providers import LLMProvider
-from amacs.orchestrator.agent_selector import _AGENT_REGISTRY
+from amacs.orchestrator.agent_selector import get_alternative_agent_classes
 from amacs.orchestrator.scheduler import ExecutionPlan
 
 logger = logging.getLogger("amacs.adaptive.reconfigurator")
@@ -33,6 +33,8 @@ class ReconfigurationResult:
 class Reconfigurator:
     """Applies :class:`AdaptationAction` directives to the live execution state."""
 
+    MAX_SWAPS_PER_TASK = 2
+
     def __init__(
         self,
         provider: Optional[LLMProvider] = None,
@@ -40,6 +42,7 @@ class Reconfigurator:
     ) -> None:
         self._provider = provider
         self._config = config
+        self._swap_counts: Dict[str, int] = {}
 
     def apply(
         self,
@@ -56,14 +59,14 @@ class Reconfigurator:
                 continue
 
             if action.action_type == ActionType.SWAP_AGENT:
-                swapped = self._swap_agent(action, agents)
+                swapped = self._swap_agent(action, agents, plan, remaining_wave_idx)
                 if swapped:
                     result.applied.append(
-                        f"Swapped agent '{action.target_agent_id}': {action.reason}"
+                        f"Swapped agent for '{action.target_agent_id}': {action.reason}"
                     )
                 else:
                     result.skipped.append(
-                        f"Could not swap '{action.target_agent_id}': no alternative available"
+                        f"Could not swap '{action.target_agent_id}': no alternative available or max swaps reached"
                     )
 
             elif action.action_type == ActionType.SKIP_TASK:
@@ -85,7 +88,7 @@ class Reconfigurator:
                 ActionType.REMOVE_AGENT,
             ):
                 # handled identically to swap for now
-                swapped = self._swap_agent(action, agents)
+                swapped = self._swap_agent(action, agents, plan, remaining_wave_idx)
                 if swapped:
                     result.applied.append(
                         f"{action.action_type.value} for '{action.target_agent_id}'"
@@ -102,34 +105,74 @@ class Reconfigurator:
     # ── Internal helpers ──────────────────────────────────────────────
 
     def _swap_agent(
-        self, action: AdaptationAction, agents: Dict[str, BaseAgent]
+        self,
+        action: AdaptationAction,
+        agents: Dict[str, BaseAgent],
+        plan: ExecutionPlan,
+        remaining_wave_idx: int = 0,
     ) -> bool:
-        """Replace the agent for *target_agent_id* with a different type."""
-        current = agents.get(action.target_agent_id)
+        """Replace agent with a different type, prioritizing tasks in remaining waves."""
+        remaining_task_ids = set()
+        if plan and plan.waves:
+            for w in plan.waves[remaining_wave_idx:]:
+                for st in w:
+                    remaining_task_ids.add(st.id)
+
+        target_id = action.target_agent_id
+        if target_id not in remaining_task_ids and remaining_task_ids:
+            # The failed agent belongs to a finished wave; find an agent in remaining waves sharing the same agent_type
+            orig_type = action.params.get("original_type")
+            for tid in remaining_task_ids:
+                ag = agents.get(tid)
+                if ag and orig_type and ag.agent_type.lower() == str(orig_type).lower():
+                    target_id = tid
+                    break
+            else:
+                # Pick the first task in remaining waves if no exact type match
+                target_id = next(iter(remaining_task_ids))
+
+        current = agents.get(target_id)
         if current is None:
             return False
 
-        original_type = action.params.get("original_type", current.agent_type)
+        # Limit swaps per task to prevent infinite swap loops
+        swap_count = self._swap_counts.get(target_id, 0)
+        if swap_count >= self.MAX_SWAPS_PER_TASK:
+            logger.warning(
+                "Max swap limit (%d) reached for subtask '%s'",
+                self.MAX_SWAPS_PER_TASK,
+                target_id,
+            )
+            return False
 
-        # pick a different agent type
-        alternatives = [
-            cls
-            for name, cls in _AGENT_REGISTRY.items()
-            if name != original_type
-        ]
+        original_type = action.params.get("original_type", current.agent_type)
+        alternatives = get_alternative_agent_classes(original_type)
         if not alternatives:
             return False
 
-        # use the first alternative (could be smarter in the future)
-        new_cls = alternatives[0]
-        agents[action.target_agent_id] = new_cls(
+        # If a specific target type was requested, try to find it; otherwise pick next available alternative
+        target_type = action.params.get("new_type")
+        new_cls = None
+        if target_type:
+            for cls in alternatives:
+                inst = cls(provider=self._provider, config=self._config)
+                if inst.agent_type.lower() == str(target_type).lower():
+                    new_cls = cls
+                    break
+        if not new_cls:
+            new_cls = alternatives[swap_count % len(alternatives)]
+
+        agents[target_id] = new_cls(
             provider=self._provider, config=self._config
         )
+        self._swap_counts[target_id] = swap_count + 1
+
         logger.info(
-            "Swapped agent %s from %s → %s",
-            action.target_agent_id,
+            "Swapped agent %s from %s → %s (swap #%d)",
+            target_id,
             original_type,
             new_cls.__name__,
+            swap_count + 1,
         )
         return True
 

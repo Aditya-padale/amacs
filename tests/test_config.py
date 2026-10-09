@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from amacs.config import AMACSConfig, Strategy, build_config
+from amacs.config import Strategy, build_config
 from amacs.exceptions import ConfigurationError
 
 
@@ -42,5 +42,5 @@ class TestConfig:
 
     def test_frozen_config(self) -> None:
         cfg = build_config()
-        with pytest.raises(Exception):
+        with pytest.raises((TypeError, AttributeError, Exception)):
             cfg.max_agents = 10  # type: ignore[misc]

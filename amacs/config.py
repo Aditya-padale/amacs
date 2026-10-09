@@ -6,7 +6,7 @@ Uses Pydantic for validation so invalid configs fail fast with clear messages.
 from __future__ import annotations
 
 from enum import Enum
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, cast
 
 from pydantic import BaseModel, Field, field_validator
 
@@ -29,6 +29,12 @@ class AMACSConfig(BaseModel):
     adaptive: bool = Field(default=False, description="Enable the adaptive control loop.")
     retry_limit: int = Field(default=3, ge=0, le=10, description="Per-agent retry limit.")
     timeout: float = Field(default=120.0, gt=0, description="Per-agent timeout in seconds.")
+    max_cost_usd: Optional[float] = Field(
+        default=None, gt=0, description="Max cost in USD budget limit."
+    )
+    max_total_tokens: Optional[int] = Field(
+        default=None, gt=0, description="Max total tokens budget limit."
+    )
     llm_provider: Optional[str] = Field(
         default=None,
         description=(
@@ -70,7 +76,7 @@ class AMACSConfig(BaseModel):
                     f"Invalid strategy '{v}'. Choose from: "
                     f"{', '.join(s.value for s in Strategy)}"
                 ) from None
-        return v
+        return cast(Strategy, v)
 
 
 def build_config(**kwargs: Any) -> AMACSConfig:

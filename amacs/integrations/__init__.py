@@ -1,6 +1,6 @@
 """Integrations sub-package — LLM providers, vector DBs, monitoring."""
 
-from amacs.integrations.llm_providers import (  # noqa: F401
+from amacs.integrations.llm_providers import (
     LLMProvider,
     LLMResponse,
     Message,
