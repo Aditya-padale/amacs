@@ -32,7 +32,7 @@ class DebateCoordinator(Coordinator):
         critic = AnalysisAgent(provider=self._provider, config=self._config)
 
         # Step 1: Initial proposal
-        prop_res = proposer.run(sub_task, context, bus=None)
+        prop_res = proposer.run(sub_task, context, bus=bus)
         if not prop_res.success:
             return prop_res
 
@@ -42,7 +42,7 @@ class DebateCoordinator(Coordinator):
             label="analyze",
             description=f"Critique and identify weaknesses or flaws in the following proposal:\n{prop_res.content}",
         )
-        crit_res = critic.run(critique_task, context, bus=None)
+        crit_res = critic.run(critique_task, context, bus=bus)
 
         # Step 3: Consensus synthesis
         synth_messages = [
@@ -60,16 +60,29 @@ class DebateCoordinator(Coordinator):
             ),
         ]
 
+        p_tokens = prop_res.token_usage.get("prompt_tokens", 0) + crit_res.token_usage.get("prompt_tokens", 0)
+        c_tokens = prop_res.token_usage.get("completion_tokens", 0) + crit_res.token_usage.get("completion_tokens", 0)
+
         try:
             resp = self._provider.chat(synth_messages)
             final_content = resp.content
+            p_tokens += resp.usage.get("prompt_tokens", 0)
+            c_tokens += resp.usage.get("completion_tokens", 0)
         except Exception as exc:
             logger.warning("Debate synthesis failed: %s. Using initial proposal.", exc)
             final_content = prop_res.content
+
+        if bus:
+            bus.publish(sub_task.id, final_content, writer="debate_consensus")
 
         return AgentResult(
             sub_task_id=sub_task.id,
             agent_name="debate_consensus",
             content=final_content,
             success=True,
+            token_usage={
+                "prompt_tokens": p_tokens,
+                "completion_tokens": c_tokens,
+                "total_tokens": p_tokens + c_tokens,
+            },
         )

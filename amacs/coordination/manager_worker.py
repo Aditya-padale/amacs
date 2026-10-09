@@ -35,7 +35,7 @@ class ManagerWorkerCoordinator(Coordinator):
             label="search",
             description=f"Gather foundational information for: {sub_task.description}",
         )
-        search_res = search_worker.run(search_task, context, bus=None)
+        search_res = search_worker.run(search_task, context, bus=bus)
 
         # Worker 2: Analysis worker
         worker_context = dict(context)
@@ -48,7 +48,7 @@ class ManagerWorkerCoordinator(Coordinator):
             label="analyze",
             description=f"Analyze data for: {sub_task.description}",
         )
-        analysis_res = analysis_worker.run(analysis_task, worker_context, bus=None)
+        analysis_res = analysis_worker.run(analysis_task, worker_context, bus=bus)
 
         # Manager synthesis
         manager = WriterAgent(provider=self._provider, config=self._config)
@@ -61,4 +61,22 @@ class ManagerWorkerCoordinator(Coordinator):
             label="write",
             description=f"Synthesize worker inputs into final result for: {sub_task.description}",
         )
-        return manager.run(manager_task, mgr_context, bus)
+        mgr_res = manager.run(manager_task, mgr_context, bus)
+
+        # Combine token usage
+        p_tokens = (
+            search_res.token_usage.get("prompt_tokens", 0)
+            + analysis_res.token_usage.get("prompt_tokens", 0)
+            + mgr_res.token_usage.get("prompt_tokens", 0)
+        )
+        c_tokens = (
+            search_res.token_usage.get("completion_tokens", 0)
+            + analysis_res.token_usage.get("completion_tokens", 0)
+            + mgr_res.token_usage.get("completion_tokens", 0)
+        )
+        mgr_res.token_usage = {
+            "prompt_tokens": p_tokens,
+            "completion_tokens": c_tokens,
+            "total_tokens": p_tokens + c_tokens,
+        }
+        return mgr_res

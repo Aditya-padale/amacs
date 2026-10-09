@@ -34,3 +34,30 @@
 ### 4. Rich Adaptation Observability
 - **Context**: `AdaptationEvent` lacked standard fields for event telemetry.
 - **Decision**: Enhanced `AdaptationEvent` with `trigger`, `signal_values`, `action`, `target`, and `outcome` fields while maintaining backward compatibility with `action_type` and `target_agent_id`.
+
+## Session 4 Decisions (2026-10-09)
+
+### 1. Coordination Modes Integration
+- **Context**: `DebateCoordinator` and `ManagerWorkerCoordinator` existed but were unwired and skipped bus publishing and token accounting.
+- **Decision**: Wired `mode="pipeline" | "debate" | "manager_worker"` on `@amacs` decorator and `AMACSConfig`. Updated coordinators to pass communication bus to worker agents and aggregate token usage across multi-turn debate/worker sub-steps.
+
+### 2. LLM Planner with Pydantic & DAG Validation
+- **Context**: LLM task decomposition lacked schema enforcement and DAG safety checks.
+- **Decision**: Wired `planner="template" | "llm"` into `Pipeline` with Pydantic `LLMSubTaskSchema` parsing and `Scheduler().plan(...)` DAG validation. Automatically logs an event and falls back to rule-based `TaskDecomposer` on invalid JSON or cycle detection.
+
+### 3. Hardened Tool Execution & Pluggable Backends
+- **Context**: `PythonCalcTool` used unsafe `eval()`, `WebSearchTool` returned hardcoded strings, and `VectorSearchTool` was unwired from vector DB adapters.
+- **Decision**: Replaced `eval()` with a strict AST-based evaluator allowing only arithmetic nodes and whitelisted math functions with tests for escape attempts. Introduced `SearchBackend` interface with `MockSearchBackend` (explicitly labeling mock output) and wired `VectorSearchTool` to `VectorStore` adapters (`SimpleVectorStore`). Added bounded tool-use loop (`max_tool_steps`) in `SearchAgent` with bus publishing.
+
+### 4. Candidate Selection & Critic/Reviser Loop
+- **Context**: Critical sub-tasks lacked candidate exploration and iterative refinement.
+- **Decision**: Added `candidates_k > 1` support in `BaseAgent` generating k candidate completions evaluated by an LLM judge. Implemented a rubric-scoring critic and writer revision loop (`max_revisions`, `critic_score_threshold`) bounded by iteration limits and score thresholds.
+
+### 5. Decorator Contract & Output Validation
+- **Context**: Decorator prompt contract was ambiguous, and structured Pydantic outputs were not validated.
+- **Decision**: Added `task` (explicit prompt) and `input_mode` ("return_value_as_prompt" vs "context") parameters. Added `output_schema=<PydanticModel>` parsing with automated 1-step retry feeding validation error back to LLM.
+
+### 6. ResponseCache & Offline Build System
+- **Context**: `ResponseCache` was unwired and pyproject.toml / Makefile failed build verification offline.
+- **Decision**: Wired `ResponseCache` behind `cache=True|path` keyed by provider, model, messages, and params. Updated `pyproject.toml` build system to `setuptools` and updated `Makefile` to use `--no-isolation` and `--system-site-packages` for clean offline verification.
+

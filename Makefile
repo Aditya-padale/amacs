@@ -14,9 +14,9 @@ test-cov:
 
 verify: lint typecheck test-cov
 	rm -rf dist/ build/ *.egg-info .venv_verify
-	python -m build
-	python -m venv .venv_verify
-	.venv_verify/bin/pip install dist/*.whl
+	python -m build --no-isolation
+	python -m venv --system-site-packages .venv_verify
+	.venv_verify/bin/pip install --no-deps dist/*.whl
 	.venv_verify/bin/amacs --version
 	.venv_verify/bin/amacs benchmark
 	.venv_verify/bin/python examples/basic_usage.py

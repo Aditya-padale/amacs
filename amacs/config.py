@@ -73,6 +73,48 @@ class AMACSConfig(BaseModel):
         ge=100,
         description="Max tokens allowed for prior context in agent user prompt.",
     )
+    mode: str = Field(
+        default="pipeline",
+        description="Coordination mode: 'pipeline', 'debate', or 'manager_worker'.",
+    )
+    planner: str = Field(
+        default="template",
+        description="Planner type: 'template' or 'llm'.",
+    )
+    task: Optional[str] = Field(
+        default=None,
+        description="Explicit task description prompt.",
+    )
+    input_mode: str = Field(
+        default="context",
+        description="Input mode: 'context', 'return_value_as_prompt', or 'explicit'.",
+    )
+    output_schema: Optional[Any] = Field(
+        default=None,
+        description="Pydantic model class for structured output validation.",
+    )
+    cache: Any = Field(
+        default=False,
+        description="Enable LLM response caching (bool or cache file path).",
+    )
+    candidates_k: int = Field(
+        default=1,
+        ge=1,
+        le=5,
+        description="Number of candidate outputs generated for critical tasks.",
+    )
+    max_revisions: int = Field(
+        default=2,
+        ge=0,
+        le=5,
+        description="Maximum number of critic-reviser loops.",
+    )
+    critic_score_threshold: float = Field(
+        default=0.8,
+        ge=0.0,
+        le=1.0,
+        description="Threshold score (0.0 to 1.0) required to pass critic check.",
+    )
     extra: Dict[str, Any] = Field(
         default_factory=dict,
         description="Arbitrary extra parameters forwarded to agents and hooks.",

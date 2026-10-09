@@ -17,6 +17,17 @@ from amacs.orchestrator.task_analyzer import TaskProfile
 logger = logging.getLogger("amacs.orchestrator.llm_decomposer")
 
 
+from pydantic import BaseModel, Field
+
+
+class LLMSubTaskSchema(BaseModel):
+    id: str
+    label: str = Field(default="general")
+    description: str = Field(default="")
+    dependencies: List[str] = Field(default_factory=list)
+    critical: bool = Field(default=True)
+
+
 class LLMTaskDecomposer:
     """Uses LLM structured generation to decompose complex prompts into sub-tasks."""
 
@@ -56,18 +67,25 @@ class LLMTaskDecomposer:
                 cleaned = cleaned.split("```")[1].split("```")[0].strip()
 
             items = json.loads(cleaned)
+            if not isinstance(items, list):
+                raise TypeError("Expected JSON array of sub-tasks")
+
             sub_tasks: List[SubTask] = []
             for item in items:
+                validated = LLMSubTaskSchema.model_validate(item)
                 sub_tasks.append(
                     SubTask(
-                        id=str(item["id"]),
-                        label=str(item.get("label", "general")),
-                        description=str(item.get("description", "")),
-                        dependencies=list(item.get("dependencies", [])),
-                        critical=bool(item.get("critical", True)),
+                        id=validated.id,
+                        label=validated.label,
+                        description=validated.description,
+                        dependencies=validated.dependencies,
+                        critical=validated.critical,
                     )
                 )
+
             if sub_tasks:
+                from amacs.orchestrator.scheduler import Scheduler
+                Scheduler(config=self._config).plan(sub_tasks)
                 return sub_tasks
         except Exception as exc:
             logger.warning("LLM task decomposition failed (%s). Falling back to rule-based decomposer.", exc)

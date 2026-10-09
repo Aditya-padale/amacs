@@ -25,6 +25,41 @@ class VectorStore(ABC):
         """Query for nearest neighbours."""
 
 
+class SimpleVectorStore(VectorStore):
+    """In-memory vector and document store adapter for keyword/semantic matching."""
+
+    def __init__(self, documents: Optional[List[str]] = None) -> None:
+        self.documents: List[str] = documents or []
+
+    def upsert(self, vectors: List[Dict[str, Any]]) -> None:
+        for v in vectors:
+            content = v.get("content") or v.get("text") or str(v.get("metadata", {}))
+            if content:
+                self.documents.append(content)
+
+    def query(
+        self,
+        vector: List[float],
+        top_k: int = 5,
+        filter: Optional[Dict[str, Any]] = None,
+    ) -> List[Dict[str, Any]]:
+        return [
+            {"id": i, "score": 1.0, "metadata": {"text": doc}}
+            for i, doc in enumerate(self.documents[:top_k])
+        ]
+
+    def search_text(self, query_text: str, top_k: int = 5) -> List[str]:
+        words = set(query_text.lower().split())
+        scored: List[tuple[int, str]] = []
+        for doc in self.documents:
+            doc_words = set(doc.lower().split())
+            overlap = len(words & doc_words)
+            if overlap > 0:
+                scored.append((overlap, doc))
+        scored.sort(key=lambda x: x[0], reverse=True)
+        return [doc for _, doc in scored[:top_k]]
+
+
 class PineconeStore(VectorStore):
     """Pinecone adapter — requires ``pinecone-client``."""
 
