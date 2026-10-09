@@ -78,22 +78,32 @@ class Aggregator:
         min_ratio = self._config.min_revision_ratio if self._config else 0.6
         val_report = ValidationReport(verdict="pass", issues=[], revised_text=None)
 
-        # Final validation pass (non-destructive)
-        try:
-            val_report = self._validate(merged, bus)
-            if val_report.verdict == "revise" and val_report.revised_text:
-                rev_text = val_report.revised_text.strip()
-                if len(rev_text) >= len(merged) * min_ratio:
-                    merged = rev_text
-                else:
-                    logger.warning(
-                        "Revised text length (%d) below min_revision_ratio (%f of %d). Keeping raw merge.",
-                        len(rev_text),
-                        min_ratio,
-                        len(merged),
-                    )
-        except Exception as exc:
-            logger.warning("Final validation failed (using unvalidated merge): %s", exc)
+        # Check strategy rules before running optional validation pass
+        skip_validation = False
+        if self._config and self._config.strategy:
+            from amacs.strategy import StrategyPolicy
+            strat_val = self._config.strategy.value if hasattr(self._config.strategy, "value") else str(self._config.strategy)
+            rules = StrategyPolicy.get_rules(strat_val)
+            if not rules.enable_validation_pass or not rules.enable_critique_revision:
+                skip_validation = True
+
+        if not skip_validation:
+            # Final validation pass (non-destructive)
+            try:
+                val_report = self._validate(merged, bus)
+                if val_report.verdict == "revise" and val_report.revised_text:
+                    rev_text = val_report.revised_text.strip()
+                    if len(rev_text) >= len(merged) * min_ratio:
+                        merged = rev_text
+                    else:
+                        logger.warning(
+                            "Revised text length (%d) below min_revision_ratio (%f of %d). Keeping raw merge.",
+                            len(rev_text),
+                            min_ratio,
+                            len(merged),
+                        )
+            except Exception as exc:
+                logger.warning("Final validation failed (using unvalidated merge): %s", exc)
 
         self.validation_report = val_report.model_dump()
         return merged

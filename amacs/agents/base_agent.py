@@ -185,21 +185,48 @@ class BaseAgent(ABC):
 
         model = (
             StrategyPolicy.resolve_model(
-                self._config.strategy.value,
+                self._config.strategy.value if hasattr(self._config.strategy, "value") else str(self._config.strategy),
                 self._provider.name(),
                 self._config.llm_model,
+                agent_type=self.agent_type,
+                config=self._config,
             )
             if self._config
             else None
         )
         timeout = self._config.timeout if self._config else None
-        resp: LLMResponse = self._provider.chat(messages, model=model, timeout=timeout)
+        if self._config and self._config.strategy:
+            rules = StrategyPolicy.get_rules(
+                self._config.strategy.value if hasattr(self._config.strategy, "value") else str(self._config.strategy)
+            )
+            if (timeout is None or timeout == 120.0) and rules.timeout_seconds is not None:
+                timeout = rules.timeout_seconds
+
+        if timeout is not None and timeout > 0:
+            import concurrent.futures
+
+            from amacs.exceptions import AgentTimeoutError
+
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+                future = executor.submit(self._provider.chat, messages, model=model, timeout=timeout)
+                try:
+                    resp: LLMResponse = future.result(timeout=timeout)
+                except concurrent.futures.TimeoutError:
+                    # Note: Sync Python threads cannot be forcefully killed; the underlying call thread
+                    # continues until provider completion/error, but AMACS raises AgentTimeoutError immediately.
+                    raise AgentTimeoutError(
+                        f"Agent '{self.agent_type}' for sub-task '{sub_task.id}' timed out after {timeout}s"
+                    ) from None
+        else:
+            resp = self._provider.chat(messages, model=model, timeout=timeout)
+
         return AgentResult(
             sub_task_id=sub_task.id,
             agent_name=self.agent_type,
             content=resp.content,
             success=True,
             token_usage=resp.usage,
+            metadata={"model": resp.model},
         )
 
     async def _acall_llm(self, sub_task: SubTask, context: Dict[str, Any]) -> AgentResult:
@@ -211,21 +238,47 @@ class BaseAgent(ABC):
 
         model = (
             StrategyPolicy.resolve_model(
-                self._config.strategy.value,
+                self._config.strategy.value if hasattr(self._config.strategy, "value") else str(self._config.strategy),
                 self._provider.name(),
                 self._config.llm_model,
+                agent_type=self.agent_type,
+                config=self._config,
             )
             if self._config
             else None
         )
         timeout = self._config.timeout if self._config else None
-        resp: LLMResponse = await self._provider.achat(messages, model=model, timeout=timeout)
+        if self._config and self._config.strategy:
+            rules = StrategyPolicy.get_rules(
+                self._config.strategy.value if hasattr(self._config.strategy, "value") else str(self._config.strategy)
+            )
+            if (timeout is None or timeout == 120.0) and rules.timeout_seconds is not None:
+                timeout = rules.timeout_seconds
+
+        if timeout is not None and timeout > 0:
+            import asyncio
+
+            from amacs.exceptions import AgentTimeoutError
+
+            try:
+                resp: LLMResponse = await asyncio.wait_for(
+                    self._provider.achat(messages, model=model, timeout=timeout),
+                    timeout=timeout,
+                )
+            except asyncio.TimeoutError:
+                raise AgentTimeoutError(
+                    f"Agent '{self.agent_type}' for sub-task '{sub_task.id}' timed out after {timeout}s"
+                ) from None
+        else:
+            resp = await self._provider.achat(messages, model=model, timeout=timeout)
+
         return AgentResult(
             sub_task_id=sub_task.id,
             agent_name=self.agent_type,
             content=resp.content,
             success=True,
             token_usage=resp.usage,
+            metadata={"model": resp.model},
         )
 
     def _run_with_retry(

@@ -20,6 +20,7 @@ from amacs.communication import CommunicationBus
 from amacs.config import AMACSConfig
 from amacs.exceptions import OrchestrationError
 from amacs.orchestrator.scheduler import ExecutionPlan
+from amacs.pricing import calculate_cost
 from amacs.results import AdaptationEvent
 
 logger = logging.getLogger("amacs.executor")
@@ -44,6 +45,7 @@ class WaveExecutor:
         self.adaptation_events: List[AdaptationEvent] = []
         self.accumulated_tokens: int = 0
         self.accumulated_cost_usd: float = 0.0
+        self._budget_degraded: bool = False
 
     def execute_sync(
         self,
@@ -99,7 +101,7 @@ class WaveExecutor:
                 all_results.extend(wave_results)
                 context = bus.snapshot()
 
-            # Inter-wave adaptation step
+            # Inter-wave adaptation step & budget check
             self._adapt_between_waves(wave_idx, len(plan.waves), agents, plan)
             wave_idx += 1
 
@@ -169,8 +171,16 @@ class WaveExecutor:
         tokens = res.token_usage.get("total_tokens", 0)
         prompt_tok = res.token_usage.get("prompt_tokens", 0)
         comp_tok = res.token_usage.get("completion_tokens", 0)
+        model_name = res.metadata.get("model", "unknown") if res.metadata else "unknown"
+        price_overrides = (
+            self._config.extra.get("price_overrides")
+            if self._config and self._config.extra
+            else None
+        )
+
+        cost = calculate_cost(model_name, prompt_tok, comp_tok, price_overrides)
         self.accumulated_tokens += tokens
-        self.accumulated_cost_usd += (prompt_tok * 0.000002) + (comp_tok * 0.000006)
+        self.accumulated_cost_usd += cost
 
         if self._config.max_total_tokens and self.accumulated_tokens > self._config.max_total_tokens:
             from amacs.exceptions import BudgetExceededError
@@ -200,6 +210,56 @@ class WaveExecutor:
                     res.error or "unknown",
                 )
 
+    def _check_and_degrade_budget(
+        self,
+        current_wave_idx: int,
+        plan: ExecutionPlan,
+        agents: Dict[str, BaseAgent],
+    ) -> None:
+        """Check if budget threshold is reached and degrade remaining execution plan cleanly."""
+        token_limit = self._config.max_total_tokens
+        cost_limit = self._config.max_cost_usd
+
+        near_tokens = token_limit and (self.accumulated_tokens >= token_limit * 0.75)
+        near_cost = cost_limit and (self.accumulated_cost_usd >= cost_limit * 0.75)
+
+        if (near_tokens or near_cost) and not self._budget_degraded:
+            self._budget_degraded = True
+            removed_count = 0
+            if plan and plan.waves:
+                for wave in plan.waves[current_wave_idx + 1:]:
+                    to_keep = []
+                    for st in wave:
+                        if st.critical:
+                            to_keep.append(st)
+                        else:
+                            agents.pop(st.id, None)
+                            removed_count += 1
+                    wave[:] = to_keep
+
+            desc = (
+                f"Budget threshold reached (tokens={self.accumulated_tokens}, "
+                f"cost=${self.accumulated_cost_usd:.4f}). "
+            )
+            if removed_count > 0:
+                desc += f"Skipped {removed_count} optional sub-tasks for budget preservation."
+            else:
+                desc += "Switching remaining tasks to cost-effective execution."
+
+            self.adaptation_events.append(
+                AdaptationEvent(
+                    wave_index=current_wave_idx,
+                    action_type="budget_degradation",
+                    target_agent_id="system",
+                    description=desc,
+                    details={
+                        "accumulated_tokens": self.accumulated_tokens,
+                        "accumulated_cost_usd": self.accumulated_cost_usd,
+                    },
+                )
+            )
+            logger.info(desc)
+
     def _adapt_between_waves(
         self,
         current_wave_idx: int,
@@ -207,6 +267,8 @@ class WaveExecutor:
         agents: Dict[str, BaseAgent],
         plan: ExecutionPlan,
     ) -> None:
+        self._check_and_degrade_budget(current_wave_idx, plan, agents)
+
         if not (self._config.adaptive and self._monitor and self._evaluator and self._engine and self._reconfigurator):
             return
 

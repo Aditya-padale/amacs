@@ -46,6 +46,10 @@ class AMACSConfig(BaseModel):
         default=None,
         description="Model name (e.g. 'gpt-4o'). Falls back to provider default.",
     )
+    models: Optional[Dict[str, str]] = Field(
+        default=None,
+        description="Per-agent model routing mapping, e.g. {'search': 'gpt-4o-mini', 'write': 'gpt-4o'}.",
+    )
     skip_non_critical: bool = Field(
         default=True,
         description="If True, a failed non-critical sub-task is skipped instead of crashing.",

@@ -519,6 +519,190 @@ class StubProvider(LLMProvider):
         return self.chat(messages, model=model, temperature=temperature, max_tokens=max_tokens, timeout=timeout)
 
 
+# ── Scripted & Flaky Providers for Behavioral Testing ────────────────────
+
+class FakeProvider(LLMProvider):
+    """Scripted provider for behavioral testing.
+
+    Returns programmed responses per call, records every call, and can raise exceptions
+    on specific call numbers.
+    """
+
+    def __init__(
+        self,
+        responses: Optional[Sequence[Any]] = None,
+        default_response: str = "[fake] default response",
+        raise_on_call: Optional[Dict[int, Exception]] = None,
+        provider_name: str = "stub",
+    ) -> None:
+        self._responses = list(responses) if responses is not None else []
+        self._default_response = default_response
+        self._raise_on_call = raise_on_call or {}
+        self._provider_name = provider_name
+        self.calls: List[Dict[str, Any]] = []
+
+    def name(self) -> str:
+        return self._provider_name
+
+    def chat(
+        self,
+        messages: Sequence[Message],
+        *,
+        model: Optional[str] = None,
+        temperature: float = 0.7,
+        max_tokens: int = 2048,
+        timeout: Optional[float] = None,
+        **kwargs: Any,
+    ) -> LLMResponse:
+        call_idx = len(self.calls) + 1
+        call_record = {
+            "index": call_idx,
+            "messages": list(messages),
+            "model": model,
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+            "timeout": timeout,
+            "kwargs": kwargs,
+        }
+        self.calls.append(call_record)
+
+        if call_idx in self._raise_on_call:
+            raise self._raise_on_call[call_idx]
+
+        if self._responses:
+            next_resp = self._responses.pop(0)
+            if isinstance(next_resp, Exception):
+                raise next_resp
+            if isinstance(next_resp, LLMResponse):
+                return next_resp
+            return LLMResponse(
+                content=str(next_resp),
+                model=model or self._provider_name,
+                usage={"prompt_tokens": 10, "completion_tokens": 20, "total_tokens": 30},
+            )
+
+        last_user = next(
+            (m.content for m in reversed(list(messages)) if m.role == "user"), ""
+        )
+        content = (
+            self._default_response.format(user=last_user, idx=call_idx)
+            if ("{user}" in self._default_response or "{idx}" in self._default_response)
+            else self._default_response
+        )
+        return LLMResponse(
+            content=content,
+            model=model or self._provider_name,
+            usage={"prompt_tokens": 10, "completion_tokens": 20, "total_tokens": 30},
+        )
+
+    async def achat(
+        self,
+        messages: Sequence[Message],
+        *,
+        model: Optional[str] = None,
+        temperature: float = 0.7,
+        max_tokens: int = 2048,
+        timeout: Optional[float] = None,
+        **kwargs: Any,
+    ) -> LLMResponse:
+        return self.chat(
+            messages,
+            model=model,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            timeout=timeout,
+            **kwargs,
+        )
+
+
+class FlakyProvider(LLMProvider):
+    """Wrapper provider simulating latency, random failures, and empty outputs."""
+
+    def __init__(
+        self,
+        base_provider: Optional[LLMProvider] = None,
+        failure_rate: float = 0.0,
+        latency_seconds: float = 0.0,
+        empty_output_rate: float = 0.0,
+        seed: Optional[int] = None,
+    ) -> None:
+        import random
+        self._base = base_provider or StubProvider()
+        self._failure_rate = failure_rate
+        self._latency_seconds = latency_seconds
+        self._empty_output_rate = empty_output_rate
+        self._rng = random.Random(seed) if seed is not None else random.Random()
+
+    def name(self) -> str:
+        return self._base.name()
+
+    def chat(
+        self,
+        messages: Sequence[Message],
+        *,
+        model: Optional[str] = None,
+        temperature: float = 0.7,
+        max_tokens: int = 2048,
+        timeout: Optional[float] = None,
+        **kwargs: Any,
+    ) -> LLMResponse:
+        import time
+        if self._latency_seconds > 0:
+            time.sleep(self._latency_seconds)
+
+        if self._failure_rate > 0 and self._rng.random() < self._failure_rate:
+            raise LLMProviderError("FlakyProvider simulated 503 service unavailable error")
+
+        if self._empty_output_rate > 0 and self._rng.random() < self._empty_output_rate:
+            return LLMResponse(
+                content="",
+                model=model or self.name(),
+                usage={"prompt_tokens": 5, "completion_tokens": 0, "total_tokens": 5},
+            )
+
+        return self._base.chat(
+            messages,
+            model=model,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            timeout=timeout,
+            **kwargs,
+        )
+
+    async def achat(
+        self,
+        messages: Sequence[Message],
+        *,
+        model: Optional[str] = None,
+        temperature: float = 0.7,
+        max_tokens: int = 2048,
+        timeout: Optional[float] = None,
+        **kwargs: Any,
+    ) -> LLMResponse:
+        import asyncio
+        if self._latency_seconds > 0:
+            await asyncio.sleep(self._latency_seconds)
+
+        if self._failure_rate > 0 and self._rng.random() < self._failure_rate:
+            raise LLMProviderError("FlakyProvider simulated 503 service unavailable error")
+
+        if self._empty_output_rate > 0 and self._rng.random() < self._empty_output_rate:
+            return LLMResponse(
+                content="",
+                model=model or self.name(),
+                usage={"prompt_tokens": 5, "completion_tokens": 0, "total_tokens": 5},
+            )
+
+        return await self._base.achat(
+            messages,
+            model=model,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            timeout=timeout,
+            **kwargs,
+        )
+
+
 # ── Factory ───────────────────────────────────────────────────────────────
 
 _PROVIDERS: Dict[str, Type[LLMProvider]] = {
@@ -527,6 +711,8 @@ _PROVIDERS: Dict[str, Type[LLMProvider]] = {
     "ollama": OllamaProvider,
     "gemini": GeminiProvider,
     "stub": StubProvider,
+    "fake": FakeProvider,
+    "flaky": FlakyProvider,
 }
 
 

@@ -37,6 +37,7 @@ def test_aggregator_preserves_raw_merge_on_pass() -> None:
 
     assert final_output == "Search Output\n\nAnalyze Output"
     assert aggregator.raw_merge == "Search Output\n\nAnalyze Output"
+    assert aggregator.validation_report is not None
     assert aggregator.validation_report["verdict"] == "pass"
 
 
@@ -60,6 +61,7 @@ def test_aggregator_replaces_on_valid_revision() -> None:
 
     assert final_output == revised
     assert aggregator.raw_merge == "Original content string."
+    assert aggregator.validation_report is not None
     assert aggregator.validation_report["verdict"] == "revise"
     assert aggregator.validation_report["issues"] == ["typo"]
 
@@ -85,6 +87,7 @@ def test_aggregator_rejects_short_revision() -> None:
     # Rejects short revision and keeps raw merge
     assert final_output == "Original content string that is quite long."
     assert aggregator.raw_merge == "Original content string that is quite long."
+    assert aggregator.validation_report is not None
     assert aggregator.validation_report["verdict"] == "revise"
 
 
@@ -105,4 +108,5 @@ def test_aggregator_fallback_on_parse_error() -> None:
     final_output = aggregator.aggregate(results, sub_tasks, bus)
 
     assert final_output == "Original content."
+    assert aggregator.validation_report is not None
     assert aggregator.validation_report["verdict"] == "pass"
