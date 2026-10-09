@@ -30,7 +30,7 @@ jobs:
           python-version: ${{ matrix.python-version }}
       - name: Record interpreter
         run: python --version | tee -a "$GITHUB_STEP_SUMMARY"
-      - run: pip install -e ".[dev]" build
+      - run: pip install -e ".[dev,all-llm]" build
       - run: |
           python -m pytest tests/ -v \
             --cov=amacs --cov-report=term-missing \
