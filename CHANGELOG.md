@@ -1,5 +1,11 @@
 # Changelog
 
+## [0.2.0] - 2026-10-09
+
+- Documented the implemented pipeline, adaptive control loop, experimental coordination modes, and offline benchmark limits.
+- Added architecture, adaptation, evaluation, and paper notes under `docs/`.
+- Updated package metadata, citation information, and the public version to `0.2.0`.
+
 ## Unreleased
 
 - Wired execution tracing, structured trace rendering, event hooks, and per-agent/stage cost reports into pipeline results.

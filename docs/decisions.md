@@ -1,5 +1,19 @@
 # AMACS Architecture & Technical Decisions Log
 
+## Session 5 Decisions (2026-10-09)
+
+### 1. Evidence-backed documentation
+- **Context**: The previous README described experimental and optional modules as if they were validated production capabilities.
+- **Decision**: Document the current implementation, fixture benchmark, and limitations explicitly. Do not claim PyPI publication, real web retrieval, model freshness, or quality gains without evidence.
+
+### 2. Release metadata
+- **Context**: Package version and URLs were placeholders, and no citation file existed.
+- **Decision**: Release metadata is `0.2.0`, attributed to Aditya Padale, with repository URLs from the local Git remote and a `CITATION.cff` file.
+
+### 3. Offline verification boundary
+- **Context**: The default test environment must not require network access or provider credentials.
+- **Decision**: Keep the deterministic stub and fixture benchmark as the default verification path. Live provider comparisons remain future, explicitly marked experiments.
+
 ## Session 2 Decisions (2026-10-09)
 
 ### 1. Sync Thread Cancellation & Timeout Handling

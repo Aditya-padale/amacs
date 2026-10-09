@@ -1,0 +1,13 @@
+cff-version: 1.2.0
+title: "AMACS: Adaptive Multi-Agent Coordination System"
+message: "If you use AMACS, please cite this repository."
+type: software
+authors:
+  - family-names: Padale
+    given-names: Aditya
+    email: adityapadale25@gmail.com
+repository-code: "https://github.com/Aditya-padale/amacs"
+url: "https://github.com/Aditya-padale/amacs"
+license: MIT
+version: "0.2.0"
+date-released: 2026-10-09

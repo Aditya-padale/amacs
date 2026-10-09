@@ -18,7 +18,7 @@ class TestCLI:
         assert exc_info.value.code == 0
         captured = capsys.readouterr()
         assert "amacs" in captured.out
-        assert "0.1.0" in captured.out
+        assert "0.2.0" in captured.out
 
     def test_run_command(self) -> None:
         with tempfile.NamedTemporaryFile("w", suffix=".py", delete=False) as f:

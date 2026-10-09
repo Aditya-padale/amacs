@@ -13,7 +13,7 @@ Add multi-agent AI coordination to any function with a single decorator::
 
 from __future__ import annotations
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 # ── Public API ────────────────────────────────────────────────────────────
 

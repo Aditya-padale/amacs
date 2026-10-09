@@ -4,13 +4,13 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "amacs"
-version = "0.1.0"
+version = "0.2.0"
 description = "Adaptive Multi-Agent Coordination System — add multi-agent AI coordination to any function with a single decorator."
 readme = "README.md"
 license = { text = "MIT" }
 requires-python = ">=3.9"
 authors = [
-    { name = "AMACS Team", email = "dev@amacs.ai" },
+    { name = "Aditya Padale", email = "adityapadale25@gmail.com" },
 ]
 classifiers = [
     "Development Status :: 3 - Alpha",
@@ -55,10 +55,10 @@ dev = [
 amacs = "amacs.cli:main"
 
 [project.urls]
-Homepage = "https://github.com/amacs/amacs"
-Documentation = "https://amacs.readthedocs.io"
-Repository = "https://github.com/amacs/amacs"
-Issues = "https://github.com/amacs/amacs/issues"
+Homepage = "https://github.com/Aditya-padale/amacs"
+Documentation = "https://github.com/Aditya-padale/amacs/tree/main/docs"
+Repository = "https://github.com/Aditya-padale/amacs"
+Issues = "https://github.com/Aditya-padale/amacs/issues"
 
 [tool.setuptools.packages.find]
 where = ["."]
