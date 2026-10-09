@@ -41,7 +41,7 @@ def main(argv: list[str] | None = None) -> None:
         sys.argv = [args.script]
         runpy.run_path(args.script, run_name="__main__")
     elif args.command == "benchmark":
-        from benchmarks.benchmark_suite import run_benchmark
+        from amacs.benchmarks.benchmark_suite import run_benchmark
         run_benchmark()
     else:
         parser.print_help()

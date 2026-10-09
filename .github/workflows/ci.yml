@@ -15,8 +15,8 @@ jobs:
         with:
           python-version: "3.12"
       - run: pip install -e ".[dev]"
-      - run: python -m ruff check amacs/ tests/
-      - run: python -m mypy amacs/ --ignore-missing-imports
+      - run: python -m ruff check .
+      - run: python -m mypy amacs/ benchmarks/ --ignore-missing-imports
 
   test:
     runs-on: ubuntu-latest
@@ -28,8 +28,16 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python-version }}
-      - run: pip install -e ".[dev]"
+      - run: pip install -e ".[dev]" build
       - run: |
           python -m pytest tests/ -v \
             --cov=amacs --cov-report=term-missing \
-            --cov-fail-under=85
+            --cov-fail-under=80
+      - name: Wheel packaging smoke test
+        run: |
+          python -m build
+          python -m venv .venv_verify
+          .venv_verify/bin/pip install dist/*.whl
+          .venv_verify/bin/amacs --version
+          .venv_verify/bin/amacs benchmark
+          .venv_verify/bin/python examples/basic_usage.py

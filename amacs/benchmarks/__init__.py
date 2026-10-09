@@ -1,10 +1,7 @@
-"""AMACS Benchmark Suite top-level re-export for backward compatibility."""
+"""Benchmark package for AMACS."""
 
 from __future__ import annotations
 
 from amacs.benchmarks.benchmark_suite import run_benchmark
 
 __all__ = ["run_benchmark"]
-
-if __name__ == "__main__":
-    run_benchmark()
