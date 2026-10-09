@@ -26,6 +26,9 @@ class AgentMetrics:
     last_latency: float = 0.0
     last_error: Optional[str] = None
     timestamps: List[float] = field(default_factory=list)
+    last_content: Optional[str] = None
+    quality_scores: List[float] = field(default_factory=list)
+    burn_rate: float = 0.0
 
 
 @dataclass
@@ -55,6 +58,9 @@ class Monitor:
         agent_type: str,
         latency: float,
         tokens: int = 0,
+        content: Optional[str] = None,
+        quality_score: Optional[float] = None,
+        burn_rate: float = 0.0,
     ) -> None:
         """Record a successful agent execution."""
         with self._lock:
@@ -64,7 +70,13 @@ class Monitor:
             m.total_latency += latency
             m.last_latency = latency
             m.total_tokens += tokens
+            if content is not None:
+                m.last_content = content
             m.timestamps.append(time.time())
+            if quality_score is not None:
+                m.quality_scores.append(quality_score)
+            if burn_rate > 0:
+                m.burn_rate = burn_rate
 
     def record_failure(
         self,
@@ -72,6 +84,7 @@ class Monitor:
         agent_type: str,
         latency: float,
         error: str,
+        content: Optional[str] = None,
     ) -> None:
         """Record a failed agent execution."""
         with self._lock:
@@ -81,6 +94,8 @@ class Monitor:
             m.total_latency += latency
             m.last_latency = latency
             m.last_error = error
+            if content is not None:
+                m.last_content = content
             m.timestamps.append(time.time())
 
     def get_agent_metrics(self, agent_id: str) -> Optional[AgentMetrics]:
@@ -89,7 +104,6 @@ class Monitor:
             m = self._metrics.get(agent_id)
             if m is None:
                 return None
-            # return a copy
             return AgentMetrics(
                 agent_id=m.agent_id,
                 agent_type=m.agent_type,
@@ -101,6 +115,9 @@ class Monitor:
                 last_latency=m.last_latency,
                 last_error=m.last_error,
                 timestamps=list(m.timestamps),
+                last_content=m.last_content,
+                quality_scores=list(m.quality_scores),
+                burn_rate=m.burn_rate,
             )
 
     def snapshot(self) -> SystemSnapshot:

@@ -18,6 +18,21 @@ class AdaptationEvent:
     target_agent_id: str
     description: str
     details: dict[str, Any] = field(default_factory=dict)
+    trigger: str = ""
+    signal_values: dict[str, Any] = field(default_factory=dict)
+    action: str = ""
+    target: str = ""
+    outcome: str = ""
+
+    def __post_init__(self) -> None:
+        if not self.action:
+            self.action = self.action_type
+        if not self.action_type:
+            self.action_type = self.action
+        if not self.target:
+            self.target = self.target_agent_id
+        if not self.target_agent_id:
+            self.target_agent_id = self.target
 
 
 @dataclass

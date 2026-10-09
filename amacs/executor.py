@@ -11,7 +11,7 @@ import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Callable, Dict, List, Optional
 
-from amacs.adaptive.adaptation_engine import AdaptationEngine
+from amacs.adaptive.adaptation_engine import ActionType, AdaptationEngine
 from amacs.adaptive.evaluator import Evaluator
 from amacs.adaptive.monitor import Monitor
 from amacs.adaptive.reconfigurator import Reconfigurator
@@ -89,6 +89,102 @@ class WaveExecutor:
                         wave_results.append(res)
                         self._process_result(res, on_result)
 
+                # Adaptation & re-execution step for current wave
+                if (
+                    self._config.adaptive
+                    and self._evaluator
+                    and self._engine
+                    and self._reconfigurator
+                    and self._monitor
+                ):
+                    report = self._evaluator.evaluate(self._monitor)
+                    if not report.system_healthy:
+                        actions = self._engine.decide(report, total_agents=len(agents))
+                        for act in actions:
+                            if act.action_type in (
+                                ActionType.RETRY_WITH_DIFFERENT_AGENT,
+                                ActionType.SWAP_AGENT,
+                                ActionType.SWITCH_MODEL,
+                            ):
+                                st_id = act.target_agent_id
+                                st_obj = next((s for s in wave if s.id == st_id), None)
+                                reconfig_res = self._reconfigurator.apply(
+                                    [act], agents, plan, remaining_wave_idx=wave_idx + 1
+                                )
+                                if reconfig_res.applied and st_obj and st_id in agents:
+                                    new_agent = agents[st_id]
+                                    try:
+                                        res_retry = new_agent.run(st_obj, context, bus)
+                                    except Exception as exc:
+                                        res_retry = AgentResult(
+                                            sub_task_id=st_id,
+                                            agent_name=new_agent.agent_type,
+                                            content="",
+                                            success=False,
+                                            error=str(exc),
+                                        )
+                                    self._process_result(res_retry, on_result)
+                                    outcome = "retry_succeeded" if res_retry.success else "retry_failed"
+
+                                    for idx, existing_res in enumerate(wave_results):
+                                        if existing_res.sub_task_id == st_id:
+                                            wave_results[idx] = res_retry
+                                            break
+                                    else:
+                                        wave_results.append(res_retry)
+
+                                    trigger_val = act.params.get("trigger", "evaluation_trigger")
+                                    signal_vals = act.params.get("signal_values", {})
+                                    event = AdaptationEvent(
+                                        wave_index=wave_idx,
+                                        action_type=act.action_type.value,
+                                        target_agent_id=st_id,
+                                        description=f"Adapted task '{st_id}' via {act.action_type.value} ({outcome})",
+                                        details={"reason": act.reason},
+                                        trigger=trigger_val,
+                                        signal_values=signal_vals,
+                                        action=act.action_type.value,
+                                        target=st_id,
+                                        outcome=outcome,
+                                    )
+                                    self.adaptation_events.append(event)
+                                else:
+                                    trigger_val = act.params.get("trigger", "evaluation_trigger")
+                                    signal_vals = act.params.get("signal_values", {})
+                                    event = AdaptationEvent(
+                                        wave_index=wave_idx,
+                                        action_type=act.action_type.value,
+                                        target_agent_id=st_id,
+                                        description=f"Skipped adaptation for '{st_id}': max swaps or no alternative",
+                                        details={"reason": act.reason},
+                                        trigger=trigger_val,
+                                        signal_values=signal_vals,
+                                        action=act.action_type.value,
+                                        target=st_id,
+                                        outcome="skipped",
+                                    )
+                                    self.adaptation_events.append(event)
+                            else:
+                                reconfig_res = self._reconfigurator.apply(
+                                    [act], agents, plan, remaining_wave_idx=wave_idx + 1
+                                )
+                                for item in reconfig_res.applied:
+                                    trigger_val = act.params.get("trigger", "evaluation_trigger")
+                                    signal_vals = act.params.get("signal_values", {})
+                                    event = AdaptationEvent(
+                                        wave_index=wave_idx,
+                                        action_type=act.action_type.value,
+                                        target_agent_id=act.target_agent_id or "system",
+                                        description=item,
+                                        details={"reason": act.reason},
+                                        trigger=trigger_val,
+                                        signal_values=signal_vals,
+                                        action=act.action_type.value,
+                                        target=act.target_agent_id or "system",
+                                        outcome="applied",
+                                    )
+                                    self.adaptation_events.append(event)
+
                 # Check critical failure
                 for r in wave_results:
                     if not r.success:
@@ -101,7 +197,6 @@ class WaveExecutor:
                 all_results.extend(wave_results)
                 context = bus.snapshot()
 
-            # Inter-wave adaptation step & budget check
             self._adapt_between_waves(wave_idx, len(plan.waves), agents, plan)
             wave_idx += 1
 
@@ -143,6 +238,102 @@ class WaveExecutor:
                         )
                     wave_results.append(res)  # type: ignore[arg-type]
                     self._process_result(res, on_result)  # type: ignore[arg-type]
+
+                # Adaptation & re-execution step for current wave
+                if (
+                    self._config.adaptive
+                    and self._evaluator
+                    and self._engine
+                    and self._reconfigurator
+                    and self._monitor
+                ):
+                    report = self._evaluator.evaluate(self._monitor)
+                    if not report.system_healthy:
+                        actions = self._engine.decide(report, total_agents=len(agents))
+                        for act in actions:
+                            if act.action_type in (
+                                ActionType.RETRY_WITH_DIFFERENT_AGENT,
+                                ActionType.SWAP_AGENT,
+                                ActionType.SWITCH_MODEL,
+                            ):
+                                st_id = act.target_agent_id
+                                st_obj = next((s for s in wave if s.id == st_id), None)
+                                reconfig_res = self._reconfigurator.apply(
+                                    [act], agents, plan, remaining_wave_idx=wave_idx + 1
+                                )
+                                if reconfig_res.applied and st_obj and st_id in agents:
+                                    new_agent = agents[st_id]
+                                    try:
+                                        res_retry = await new_agent.arun(st_obj, context, bus)
+                                    except Exception as exc:
+                                        res_retry = AgentResult(
+                                            sub_task_id=st_id,
+                                            agent_name=new_agent.agent_type,
+                                            content="",
+                                            success=False,
+                                            error=str(exc),
+                                        )
+                                    self._process_result(res_retry, on_result)
+                                    outcome = "retry_succeeded" if res_retry.success else "retry_failed"
+
+                                    for idx, existing_res in enumerate(wave_results):
+                                        if existing_res.sub_task_id == st_id:
+                                            wave_results[idx] = res_retry
+                                            break
+                                    else:
+                                        wave_results.append(res_retry)
+
+                                    trigger_val = act.params.get("trigger", "evaluation_trigger")
+                                    signal_vals = act.params.get("signal_values", {})
+                                    event = AdaptationEvent(
+                                        wave_index=wave_idx,
+                                        action_type=act.action_type.value,
+                                        target_agent_id=st_id,
+                                        description=f"Adapted task '{st_id}' via {act.action_type.value} ({outcome})",
+                                        details={"reason": act.reason},
+                                        trigger=trigger_val,
+                                        signal_values=signal_vals,
+                                        action=act.action_type.value,
+                                        target=st_id,
+                                        outcome=outcome,
+                                    )
+                                    self.adaptation_events.append(event)
+                                else:
+                                    trigger_val = act.params.get("trigger", "evaluation_trigger")
+                                    signal_vals = act.params.get("signal_values", {})
+                                    event = AdaptationEvent(
+                                        wave_index=wave_idx,
+                                        action_type=act.action_type.value,
+                                        target_agent_id=st_id,
+                                        description=f"Skipped adaptation for '{st_id}': max swaps or no alternative",
+                                        details={"reason": act.reason},
+                                        trigger=trigger_val,
+                                        signal_values=signal_vals,
+                                        action=act.action_type.value,
+                                        target=st_id,
+                                        outcome="skipped",
+                                    )
+                                    self.adaptation_events.append(event)
+                            else:
+                                reconfig_res = self._reconfigurator.apply(
+                                    [act], agents, plan, remaining_wave_idx=wave_idx + 1
+                                )
+                                for item in reconfig_res.applied:
+                                    trigger_val = act.params.get("trigger", "evaluation_trigger")
+                                    signal_vals = act.params.get("signal_values", {})
+                                    event = AdaptationEvent(
+                                        wave_index=wave_idx,
+                                        action_type=act.action_type.value,
+                                        target_agent_id=act.target_agent_id or "system",
+                                        description=item,
+                                        details={"reason": act.reason},
+                                        trigger=trigger_val,
+                                        signal_values=signal_vals,
+                                        action=act.action_type.value,
+                                        target=act.target_agent_id or "system",
+                                        outcome="applied",
+                                    )
+                                    self.adaptation_events.append(event)
 
                 for r in wave_results:
                     if not r.success:
@@ -194,6 +385,11 @@ class WaveExecutor:
                 f"Cost limit exceeded: ${self.accumulated_cost_usd:.4f} > ${self._config.max_cost_usd:.4f}"
             )
 
+        token_rate = self.accumulated_tokens / self._config.max_total_tokens if self._config.max_total_tokens else 0.0
+        cost_rate = self.accumulated_cost_usd / self._config.max_cost_usd if self._config.max_cost_usd else 0.0
+        burn_rate = max(token_rate, cost_rate)
+        quality_score = res.metadata.get("quality_score") if res.metadata else None
+
         if self._monitor is not None:
             if res.success:
                 self._monitor.record_success(
@@ -201,6 +397,9 @@ class WaveExecutor:
                     res.agent_name,
                     res.latency_seconds,
                     tokens,
+                    content=res.content,
+                    quality_score=quality_score,
+                    burn_rate=burn_rate,
                 )
             else:
                 self._monitor.record_failure(
@@ -208,6 +407,7 @@ class WaveExecutor:
                     res.agent_name,
                     res.latency_seconds,
                     res.error or "unknown",
+                    content=res.content,
                 )
 
     def _check_and_degrade_budget(
@@ -256,6 +456,14 @@ class WaveExecutor:
                         "accumulated_tokens": self.accumulated_tokens,
                         "accumulated_cost_usd": self.accumulated_cost_usd,
                     },
+                    trigger="budget:near_limit",
+                    signal_values={
+                        "accumulated_tokens": self.accumulated_tokens,
+                        "accumulated_cost_usd": self.accumulated_cost_usd,
+                    },
+                    action="budget_degradation",
+                    target="system",
+                    outcome="applied",
                 )
             )
             logger.info(desc)
@@ -268,26 +476,3 @@ class WaveExecutor:
         plan: ExecutionPlan,
     ) -> None:
         self._check_and_degrade_budget(current_wave_idx, plan, agents)
-
-        if not (self._config.adaptive and self._monitor and self._evaluator and self._engine and self._reconfigurator):
-            return
-
-        if current_wave_idx >= total_waves - 1:
-            return  # No remaining waves to adapt
-
-        report = self._evaluator.evaluate(self._monitor)
-        if not report.system_healthy:
-            actions = self._engine.decide(report, total_agents=len(agents))
-            reconfig_res = self._reconfigurator.apply(
-                actions, agents, plan, remaining_wave_idx=current_wave_idx + 1
-            )
-            for item in reconfig_res.applied:
-                self.adaptation_events.append(
-                    AdaptationEvent(
-                        wave_index=current_wave_idx,
-                        action_type="applied",
-                        target_agent_id="system",
-                        description=item,
-                    )
-                )
-            logger.info("Inter-wave adaptation applied after wave %d: %s", current_wave_idx, reconfig_res)

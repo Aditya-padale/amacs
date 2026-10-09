@@ -40,13 +40,19 @@ from amacs.integrations.llm_providers import (
     get_provider,
     register_provider,
 )
-from amacs.orchestrator.agent_selector import get_registered_agents, register_agent
+from amacs.orchestrator.agent_selector import (
+    get_registered_agents,
+    register_agent,
+)
+from amacs.pipeline import Pipeline
 from amacs.results import AMACSResult
 
 __all__ = [
-    # Decorator
+    # Decorator & Pipeline
     "amacs",
+    "Pipeline",
     # Config
+
     "AMACSConfig",
     "Strategy",
     # Results & Inspection

@@ -16,4 +16,21 @@
 
 ### 4. Strategy Rules & Per-Agent Model Routing
 - **Context**: `StrategyPolicy` was limited to model lookups without behavioral differentiation for `performance`, `cost`, and `speed`.
-- **Decision**: Expanded `StrategyRules` with `max_tokens`, `timeout_seconds`, `enable_validation_pass`, `max_concurrency_multiplier`, and `enable_critique_revision`. Added top-level `models` parameter for per-agent routing (e.g., `models={"search": "gpt-4o-mini", "write": "gpt-4o"}`) and `DEFAULT_MODELS` environment overrides.
+
+## Session 3 Decisions (2026-10-09)
+
+### 1. Unified `Pipeline` Runner & Decorator Refactoring
+- **Context**: `amacs/decorator.py` previously contained ~150 lines of duplicate orchestration code between `_run_pipeline_sync` and `_run_pipeline_async`.
+- **Decision**: Extracted `Pipeline` in `amacs/pipeline.py` which owns the 8 pipeline stages and exposes `run()` and `arun()` sharing identical preparation and finalization logic. `@amacs` delegates to `Pipeline`. Parity was verified with `test_pipeline_parity.py`.
+
+### 2. Immediate Mid-Wave Adaptation & Re-execution
+- **Context**: Inter-wave adaptation previously ran after wave completion without re-running failed or underperforming tasks in the current wave, allowing bad or empty outputs to propagate to subsequent waves.
+- **Decision**: Enhanced `WaveExecutor` to run `Monitor` -> `Evaluator` -> `AdaptationEngine` -> `Reconfigurator` immediately after wave execution. For `RETRY_WITH_DIFFERENT_AGENT`, `SWAP_AGENT`, and `SWITCH_MODEL`, the failed or underperforming task is swapped to a fallback agent class and re-executed mid-wave before proceeding.
+
+### 3. Comprehensive Quality Signals Beyond Failures
+- **Context**: Evaluation previously triggered only on hard exceptions or latency thresholds.
+- **Decision**: Added quality signal checks in `Evaluator` for empty/very short outputs, refusal pattern detection (`"I cannot..."`), repeated text outputs, low LLM-judge scores in metadata, and high budget burn rate. Adaptation triggers on these signals even when provider execution returned `success=True`.
+
+### 4. Rich Adaptation Observability
+- **Context**: `AdaptationEvent` lacked standard fields for event telemetry.
+- **Decision**: Enhanced `AdaptationEvent` with `trigger`, `signal_values`, `action`, `target`, and `outcome` fields while maintaining backward compatibility with `action_type` and `target_agent_id`.

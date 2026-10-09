@@ -1,5 +1,17 @@
 # AMACS Changelog
 
+## [Unreleased] - Session 3 (2026-10-09)
+
+### Added
+- **Unified `Pipeline` Class**: Extracted `Pipeline` class in `amacs.pipeline` that encapsulates end-to-end orchestration logic, exposing identical `run()` and `arun()` methods.
+- **Wave Loop Mid-Wave Re-execution**: Implemented live mid-wave adaptation and re-execution in `WaveExecutor` for `RETRY_WITH_DIFFERENT_AGENT`, `SWAP_AGENT`, and `SWITCH_MODEL`.
+- **Quality Signal Detection**: Added quality signal evaluations to `Evaluator` and `Monitor` for empty/very short outputs, refusal patterns, repeated text outputs, LLM judge scores, and budget burn rate.
+- **Rich Observability for Adaptation**: Enhanced `AdaptationEvent` with `trigger`, `signal_values`, `action`, `target`, and `outcome` fields for detailed tracing.
+- **Comprehensive Behavioral Test Suite**: Added `tests/test_pipeline_parity.py` and `tests/test_adaptation_behavioral.py` with 9 behavioral adaptation tests covering retries, quality signals, swap limits, and budget degradation.
+
+### Changed
+- **Decorator Refactoring**: Simplified `@amacs` in `amacs.decorator` to delegate sync and async execution to `Pipeline`, eliminating duplicate orchestration code.
+
 ## [Unreleased] - Session 2 (2026-10-09)
 
 ### Added

@@ -15,6 +15,7 @@ from amacs.adaptive.evaluator import EvaluationReport, HealthStatus
 
 class ActionType(str, Enum):
     RETRY_WITH_DIFFERENT_AGENT = "retry_with_different_agent"
+    SWITCH_MODEL = "switch_model"
     ADD_AGENT = "add_agent"
     REMOVE_AGENT = "remove_agent"
     REDUCE_TEAM = "reduce_team"
@@ -34,14 +35,7 @@ class AdaptationAction:
 
 
 class AdaptationEngine:
-    """Decides what changes to make based on evaluation results.
-
-    The engine applies a simple priority-based rule set:
-
-    1. **FAILING** agents → swap to a different agent type or retry.
-    2. **DEGRADED** agents with high latency → consider skipping if non-critical.
-    3. If more than half the team is underperforming → reduce team size.
-    """
+    """Decides what changes to make based on evaluation results."""
 
     def decide(
         self,
@@ -63,6 +57,11 @@ class AdaptationEngine:
         failing_count = 0
         for agent_id in report.underperforming:
             ev = report.evaluations[agent_id]
+            params = {
+                "original_type": ev.agent_type,
+                "trigger": ev.trigger,
+                "signal_values": ev.signal_values,
+            }
 
             if ev.status == HealthStatus.FAILING:
                 failing_count += 1
@@ -71,17 +70,29 @@ class AdaptationEngine:
                         action_type=ActionType.SWAP_AGENT,
                         target_agent_id=agent_id,
                         reason="; ".join(ev.reasons),
-                        params={"original_type": ev.agent_type},
+                        params=params,
                     )
                 )
             elif ev.status == HealthStatus.DEGRADED:
-                actions.append(
-                    AdaptationAction(
-                        action_type=ActionType.SKIP_TASK,
-                        target_agent_id=agent_id,
-                        reason="; ".join(ev.reasons),
+                # Quality triggers lead to RETRY_WITH_DIFFERENT_AGENT / SWITCH_MODEL
+                if ev.trigger.startswith("quality_signal:"):
+                    actions.append(
+                        AdaptationAction(
+                            action_type=ActionType.RETRY_WITH_DIFFERENT_AGENT,
+                            target_agent_id=agent_id,
+                            reason="; ".join(ev.reasons),
+                            params=params,
+                        )
                     )
-                )
+                else:
+                    actions.append(
+                        AdaptationAction(
+                            action_type=ActionType.SKIP_TASK,
+                            target_agent_id=agent_id,
+                            reason="; ".join(ev.reasons),
+                            params=params,
+                        )
+                    )
 
         # systemic issue: reduce team
         if total_agents > 0 and failing_count > total_agents / 2:

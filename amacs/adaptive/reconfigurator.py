@@ -58,7 +58,10 @@ class Reconfigurator:
             if action.action_type == ActionType.NO_ACTION:
                 continue
 
-            if action.action_type == ActionType.SWAP_AGENT:
+            if action.action_type in (
+                ActionType.SWAP_AGENT,
+                ActionType.RETRY_WITH_DIFFERENT_AGENT,
+            ):
                 swapped = self._swap_agent(action, agents, plan, remaining_wave_idx)
                 if swapped:
                     result.applied.append(
@@ -67,6 +70,28 @@ class Reconfigurator:
                 else:
                     result.skipped.append(
                         f"Could not swap '{action.target_agent_id}': no alternative available or max swaps reached"
+                    )
+
+            elif action.action_type == ActionType.SWITCH_MODEL:
+                swapped = self._swap_agent(action, agents, plan, remaining_wave_idx)
+                if swapped:
+                    result.applied.append(
+                        f"Switched model/agent for '{action.target_agent_id}': {action.reason}"
+                    )
+                else:
+                    result.skipped.append(
+                        f"Could not switch model for '{action.target_agent_id}'"
+                    )
+
+            elif action.action_type == ActionType.ADD_AGENT:
+                added = self._add_agent(action, agents, plan, remaining_wave_idx)
+                if added:
+                    result.applied.append(
+                        f"Added supplementary agent for '{action.target_agent_id}': {action.reason}"
+                    )
+                else:
+                    result.skipped.append(
+                        f"Could not add supplementary agent for '{action.target_agent_id}'"
                     )
 
             elif action.action_type == ActionType.SKIP_TASK:
@@ -82,22 +107,12 @@ class Reconfigurator:
                     f"Reduced team by {removed} non-critical agents"
                 )
 
-            elif action.action_type in (
-                ActionType.RETRY_WITH_DIFFERENT_AGENT,
-                ActionType.ADD_AGENT,
-                ActionType.REMOVE_AGENT,
-            ):
-                # handled identically to swap for now
-                swapped = self._swap_agent(action, agents, plan, remaining_wave_idx)
-                if swapped:
-                    result.applied.append(
-                        f"{action.action_type.value} for '{action.target_agent_id}'"
-                    )
-                else:
-                    result.skipped.append(
-                        f"Could not apply {action.action_type.value} "
-                        f"for '{action.target_agent_id}'"
-                    )
+            elif action.action_type == ActionType.REMOVE_AGENT:
+                self._remove_from_plan(action.target_agent_id, plan, remaining_wave_idx)
+                agents.pop(action.target_agent_id, None)
+                result.applied.append(
+                    f"Removed agent for '{action.target_agent_id}'"
+                )
 
         logger.info("Reconfiguration complete: %s", result)
         return result
@@ -111,16 +126,17 @@ class Reconfigurator:
         plan: ExecutionPlan,
         remaining_wave_idx: int = 0,
     ) -> bool:
-        """Replace agent with a different type, prioritizing tasks in remaining waves."""
-        remaining_task_ids = set()
-        if plan and plan.waves:
-            for w in plan.waves[remaining_wave_idx:]:
-                for st in w:
-                    remaining_task_ids.add(st.id)
-
+        """Replace agent with a different type."""
         target_id = action.target_agent_id
-        if target_id not in remaining_task_ids and remaining_task_ids:
-            # The failed agent belongs to a finished wave; find an agent in remaining waves sharing the same agent_type
+
+        # If target_id is not in agents, check remaining tasks
+        if target_id not in agents:
+            remaining_task_ids = set()
+            if plan and plan.waves:
+                for w in plan.waves[remaining_wave_idx:]:
+                    for st in w:
+                        remaining_task_ids.add(st.id)
+
             orig_type = action.params.get("original_type")
             for tid in remaining_task_ids:
                 ag = agents.get(tid)
@@ -128,8 +144,8 @@ class Reconfigurator:
                     target_id = tid
                     break
             else:
-                # Pick the first task in remaining waves if no exact type match
-                target_id = next(iter(remaining_task_ids))
+                if remaining_task_ids:
+                    target_id = next(iter(remaining_task_ids))
 
         current = agents.get(target_id)
         if current is None:
@@ -150,7 +166,6 @@ class Reconfigurator:
         if not alternatives:
             return False
 
-        # If a specific target type was requested, try to find it; otherwise pick next available alternative
         target_type = action.params.get("new_type")
         new_cls = None
         if target_type:
@@ -174,6 +189,38 @@ class Reconfigurator:
             new_cls.__name__,
             swap_count + 1,
         )
+        return True
+
+    def _add_agent(
+        self,
+        action: AdaptationAction,
+        agents: Dict[str, BaseAgent],
+        plan: ExecutionPlan,
+        remaining_wave_idx: int = 0,
+    ) -> bool:
+        """Add a secondary agent for a critical sub-task to remaining waves."""
+        target_id = action.target_agent_id
+        current = agents.get(target_id)
+        if current is None or not plan or not plan.waves:
+            return False
+
+        new_id = f"{target_id}_aux"
+        original_type = current.agent_type
+        alternatives = get_alternative_agent_classes(original_type)
+        new_cls = alternatives[0] if alternatives else current.__class__
+
+        new_agent = new_cls(provider=self._provider, config=self._config)
+        agents[new_id] = new_agent
+
+        new_st = SubTask(
+            id=new_id,
+            label=f"{target_id}_aux",
+            description=f"Supplementary agent task for {target_id}",
+            critical=False,
+        )
+
+        target_wave_idx = min(remaining_wave_idx, len(plan.waves) - 1)
+        plan.waves[target_wave_idx].append(new_st)
         return True
 
     @staticmethod
