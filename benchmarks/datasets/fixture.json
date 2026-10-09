@@ -1,0 +1,17 @@
+[
+  {
+    "id": "fixture-1",
+    "task": "Summarize the supplied fact: water freezes at 0 degrees Celsius.",
+    "expected": "water freezes at 0 degrees Celsius"
+  },
+  {
+    "id": "fixture-2",
+    "task": "State the arithmetic result of two plus two.",
+    "expected": "two plus two"
+  },
+  {
+    "id": "fixture-3",
+    "task": "Explain that the Earth orbits the Sun.",
+    "expected": "earth orbits the sun"
+  }
+]

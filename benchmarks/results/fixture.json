@@ -1,0 +1,72 @@
+[
+  {
+    "adaptive": false,
+    "fault_rate": 0.0,
+    "injected_failures": 0,
+    "mean_latency": 8.354000480418714e-06,
+    "recovery_rate": 0.0,
+    "runs": 9,
+    "success_rate": 1.0,
+    "system": "single-call"
+  },
+  {
+    "adaptive": false,
+    "fault_rate": 0.0,
+    "injected_failures": 0,
+    "mean_latency": 0.05929629277731389,
+    "recovery_rate": 0.0,
+    "runs": 9,
+    "success_rate": 1.0,
+    "system": "amacs"
+  },
+  {
+    "adaptive": true,
+    "fault_rate": 0.0,
+    "injected_failures": 0,
+    "mean_latency": 0.014351467667034335,
+    "recovery_rate": 0.0,
+    "runs": 9,
+    "success_rate": 1.0,
+    "system": "amacs"
+  },
+  {
+    "adaptive": false,
+    "fault_rate": 0.25,
+    "injected_failures": 21,
+    "mean_latency": 0.45676502011115694,
+    "recovery_rate": 1.0,
+    "runs": 9,
+    "success_rate": 1.0,
+    "system": "amacs"
+  },
+  {
+    "adaptive": true,
+    "fault_rate": 0.25,
+    "injected_failures": 21,
+    "mean_latency": 0.45928802099984345,
+    "recovery_rate": 1.0,
+    "runs": 9,
+    "success_rate": 1.0,
+    "system": "amacs"
+  },
+  {
+    "adaptive": false,
+    "fault_rate": 0.5,
+    "injected_failures": 34,
+    "mean_latency": 0.9004956714444334,
+    "recovery_rate": 1.0,
+    "runs": 9,
+    "success_rate": 1.0,
+    "system": "amacs"
+  },
+  {
+    "adaptive": true,
+    "fault_rate": 0.5,
+    "injected_failures": 44,
+    "mean_latency": 1.1832975115555908,
+    "recovery_rate": 1.0,
+    "runs": 9,
+    "success_rate": 1.0,
+    "system": "amacs"
+  }
+]

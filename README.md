@@ -2,7 +2,6 @@
 
 [![Python 3.9+](https://img.shields.io/badge/python-3.9%2B-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-[![PyPI](https://img.shields.io/pypi/v/amacs.svg)](https://pypi.org/project/amacs/)
 
 **Add multi-agent AI coordination to any function with a single decorator.**
 
@@ -79,25 +78,29 @@ result aggregation behind the scenes.
 ### Installation
 
 ```bash
-# Core (uses stub LLM by default for testing)
-pip install amacs
+# Install from this checkout (the project is not claiming a PyPI release here)
+pip install .
 
 # With OpenAI
-pip install amacs[openai]
+pip install .[openai]
 
 # With Anthropic
-pip install amacs[anthropic]
+pip install .[anthropic]
 
 # With local LLM (Ollama)
-pip install amacs[ollama]
+pip install .[ollama]
 
 # All LLM providers
-pip install amacs[all-llm]
+pip install .[all-llm]
 
 # Optional integrations
-pip install amacs[pinecone]      # Vector DB support
-pip install amacs[monitoring]    # Prometheus metrics
+pip install .[pinecone]         # Vector DB support
+pip install .[monitoring]       # Prometheus metrics
 ```
+
+The default provider is the deterministic `stub`; it echoes prompts for offline tests and is not a quality benchmark. `WebSearchTool` likewise uses an explicitly labeled mock backend unless an application supplies a real `SearchBackend`.
+
+Run the reproducible local benchmark with `make bench-fixture`. It writes measured JSON and Markdown outputs under `benchmarks/results/`; no real API calls are made.
 
 ### Basic Usage
 

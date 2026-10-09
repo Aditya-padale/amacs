@@ -4,6 +4,8 @@
 
 - Wired execution tracing, structured trace rendering, event hooks, and per-agent/stage cost reports into pipeline results.
 - Added `amacs trace` and `amacs bench`; `amacs run` now accepts provider, model, and strategy overrides.
+- Added an offline fixture benchmark with seeded fault injection, a single-call baseline, JSON results, and markdown reporting.
+- Made the benchmark package installable and corrected the aggregation compatibility import.
 
 # AMACS Changelog
 

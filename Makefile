@@ -1,4 +1,4 @@
-.PHONY: lint typecheck test test-cov verify ci clean
+.PHONY: lint typecheck test test-cov bench-fixture bench-full verify ci clean
 
 lint:
 	python -m ruff check amacs/ tests/ benchmarks/ examples/
@@ -11,6 +11,12 @@ test:
 
 test-cov:
 	python -m pytest tests/ -v --cov=amacs --cov-report=term-missing --cov-fail-under=86
+
+bench-fixture:
+	python -m benchmarks.run --fixture
+
+bench-full:
+	python -m benchmarks.run --full
 
 verify: lint typecheck test-cov
 	rm -rf dist/ build/ *.egg-info .venv_verify

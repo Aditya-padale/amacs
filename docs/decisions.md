@@ -37,6 +37,10 @@
 
 ## Session 4 Decisions (2026-10-09)
 
+### 0. Offline benchmark scope
+- **Context**: The repository has no verified real-task dataset or live API credentials in the default environment.
+- **Decision**: Ship a tiny deterministic fixture and report measured baseline, pipeline, and fault-injection cells. The fixture is a plumbing/recovery check, not evidence that AMACS improves answer quality. Full API-backed comparisons remain pending.
+
 ### 1. Coordination Modes Integration
 - **Context**: `DebateCoordinator` and `ManagerWorkerCoordinator` existed but were unwired and skipped bus publishing and token accounting.
 - **Decision**: Wired `mode="pipeline" | "debate" | "manager_worker"` on `@amacs` decorator and `AMACSConfig`. Updated coordinators to pass communication bus to worker agents and aggregate token usage across multi-turn debate/worker sub-steps.

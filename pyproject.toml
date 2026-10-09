@@ -62,7 +62,7 @@ Issues = "https://github.com/amacs/amacs/issues"
 
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["amacs*"]
+include = ["amacs*", "benchmarks*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

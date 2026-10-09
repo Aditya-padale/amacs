@@ -632,6 +632,8 @@ class FlakyProvider(LLMProvider):
         self._latency_seconds = latency_seconds
         self._empty_output_rate = empty_output_rate
         self._rng = random.Random(seed) if seed is not None else random.Random()
+        self.calls = 0
+        self.failures = 0
 
     def name(self) -> str:
         return self._base.name()
@@ -647,10 +649,12 @@ class FlakyProvider(LLMProvider):
         **kwargs: Any,
     ) -> LLMResponse:
         import time
+        self.calls += 1
         if self._latency_seconds > 0:
             time.sleep(self._latency_seconds)
 
         if self._failure_rate > 0 and self._rng.random() < self._failure_rate:
+            self.failures += 1
             raise LLMProviderError("FlakyProvider simulated 503 service unavailable error")
 
         if self._empty_output_rate > 0 and self._rng.random() < self._empty_output_rate:
@@ -680,10 +684,12 @@ class FlakyProvider(LLMProvider):
         **kwargs: Any,
     ) -> LLMResponse:
         import asyncio
+        self.calls += 1
         if self._latency_seconds > 0:
             await asyncio.sleep(self._latency_seconds)
 
         if self._failure_rate > 0 and self._rng.random() < self._failure_rate:
+            self.failures += 1
             raise LLMProviderError("FlakyProvider simulated 503 service unavailable error")
 
         if self._empty_output_rate > 0 and self._rng.random() < self._empty_output_rate:
