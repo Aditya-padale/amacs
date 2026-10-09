@@ -98,6 +98,22 @@ class AMACSConfig(BaseModel):
         default=False,
         description="Enable LLM response caching (bool or cache file path).",
     )
+    fallback_models: Optional[list[str]] = Field(
+        default=None,
+        description="Ordered model fallback chain used after a provider/model failure.",
+    )
+    summarize_context: bool = Field(
+        default=False,
+        description="Ask the provider to summarize oversized dependency context before truncating it.",
+    )
+    max_tool_steps: int = Field(
+        default=3, ge=0, le=20,
+        description="Maximum model-directed tool calls made for a task.",
+    )
+    otel_endpoint: Optional[str] = Field(
+        default=None,
+        description="Optional OpenTelemetry OTLP endpoint for trace export.",
+    )
     candidates_k: int = Field(
         default=1,
         ge=1,

@@ -106,3 +106,23 @@ class ContextBuilder:
             "keys_included": list(filtered.keys()),
         }
         return final_text
+
+    def summarize_then_build(
+        self,
+        context: Dict[str, Any],
+        summarizer: Callable[[str], str],
+        exclude_key: Optional[str] = None,
+        allowed_keys: Optional[Sequence[str]] = None,
+    ) -> str:
+        """Summarize oversized context before the deterministic truncation fallback."""
+        rendered = self.build_context_string(context, exclude_key, allowed_keys)
+        if not self.was_truncated:
+            return rendered
+        try:
+            summary = summarizer(rendered)
+            if summary and self.token_counter(summary) <= self.max_tokens:
+                self.truncation_record = {**(self.truncation_record or {}), "summarized": True}
+                return "Prior context (summarized):\n" + summary
+        except Exception as exc:
+            logger.warning("Context summarization failed; using truncation: %s", exc)
+        return rendered

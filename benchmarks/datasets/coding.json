@@ -1,0 +1,12 @@
+[
+  {
+    "id": "coding-1",
+    "task": "Describe a Python function that returns the sum of two numbers.",
+    "expected": "sum of two numbers"
+  },
+  {
+    "id": "coding-2",
+    "task": "Describe why input validation should happen before writing to a database.",
+    "expected": "input validation"
+  }
+]

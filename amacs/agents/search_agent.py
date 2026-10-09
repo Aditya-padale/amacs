@@ -34,27 +34,8 @@ class SearchAgent(BaseAgent):
         bus: Optional[CommunicationBus] = None,
     ) -> str:
         base_prompt = super().build_user_prompt(sub_task, context)
-        web_tool = self.tool_registry.get("web_search")
-        vector_tool = self.tool_registry.get("vector_search")
-
-        tool_outputs = []
-        steps_run = 0
-
-        if web_tool and steps_run < self.max_tool_steps:
-            steps_run += 1
-            out = web_tool.execute(query=sub_task.description)
-            tool_outputs.append(out)
-            if bus:
-                bus.publish(f"{sub_task.id}_tool_step_{steps_run}", out, writer="search_tool")
-
-        if vector_tool and steps_run < self.max_tool_steps:
-            steps_run += 1
-            out = vector_tool.execute(query=sub_task.description)
-            tool_outputs.append(out)
-            if bus:
-                bus.publish(f"{sub_task.id}_tool_step_{steps_run}", out, writer="search_tool")
-
-        if tool_outputs:
-            combined = "\n\n".join(tool_outputs)
-            return f"{base_prompt}\n\nTool Context:\n{combined}"
-        return base_prompt
+        tools = ", ".join(tool.name for tool in self.tool_registry.list_tools())
+        if bus and self.max_tool_steps:
+            # This is an audit marker, not an eager tool invocation.
+            bus.publish(f"{sub_task.id}_tool_step_1", "Awaiting model-directed tool request", writer="search_tool")
+        return f"{base_prompt}\n\nTool Context: available tools are {tools}. Request a tool only when it materially helps."

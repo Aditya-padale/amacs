@@ -76,6 +76,15 @@ class AdaptationEngine:
             elif ev.status == HealthStatus.DEGRADED:
                 # Quality triggers lead to RETRY_WITH_DIFFERENT_AGENT / SWITCH_MODEL
                 if ev.trigger.startswith("quality_signal:"):
+                    if ev.signal_values.get("quality_score", 1.0) < 0.35 and ev.signal_values.get("critical", False):
+                        actions.append(
+                            AdaptationAction(
+                                action_type=ActionType.ADD_AGENT,
+                                target_agent_id=agent_id,
+                                reason="Critical task has a persistently low quality signal.",
+                                params=params,
+                            )
+                        )
                     actions.append(
                         AdaptationAction(
                             action_type=ActionType.RETRY_WITH_DIFFERENT_AGENT,

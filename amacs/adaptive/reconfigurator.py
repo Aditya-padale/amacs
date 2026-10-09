@@ -73,10 +73,10 @@ class Reconfigurator:
                     )
 
             elif action.action_type == ActionType.SWITCH_MODEL:
-                swapped = self._swap_agent(action, agents, plan, remaining_wave_idx)
-                if swapped:
+                switched = self._switch_model(action, agents)
+                if switched:
                     result.applied.append(
-                        f"Switched model/agent for '{action.target_agent_id}': {action.reason}"
+                        f"Switched model for '{action.target_agent_id}': {action.reason}"
                     )
                 else:
                     result.skipped.append(
@@ -116,6 +116,26 @@ class Reconfigurator:
 
         logger.info("Reconfiguration complete: %s", result)
         return result
+
+    def _switch_model(self, action: AdaptationAction, agents: Dict[str, BaseAgent]) -> bool:
+        """Change the model on the existing specialist; do not disguise it as an agent swap."""
+        agent = agents.get(action.target_agent_id)
+        if agent is None:
+            return False
+        chain = action.params.get("fallback_models")
+        if not chain and self._config:
+            chain = self._config.fallback_models
+        if not chain:
+            # A deterministic cheaper default is useful even without a custom chain.
+            chain = ["gpt-4o-mini"]
+        chain = [str(item) for item in chain]
+        current_index = getattr(agent, "_model_fallback_index", -1)
+        next_index = current_index + 1
+        if next_index >= len(chain):
+            return False
+        agent.set_model_override(chain[next_index])
+        agent._model_fallback_index = next_index
+        return True
 
     # ── Internal helpers ──────────────────────────────────────────────
 

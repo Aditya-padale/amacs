@@ -6,6 +6,7 @@ and aggregates their findings into a cohesive response.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Any, Dict
 
@@ -29,7 +30,7 @@ class ManagerWorkerCoordinator(Coordinator):
         bus: CommunicationBus,
     ) -> AgentResult:
         # Worker 1: Search worker
-        search_worker = SearchAgent(provider=self._provider, config=self._config)
+        search_worker = self.prepare_agent(SearchAgent(provider=self._provider, config=self._config))
         search_task = SubTask(
             id=f"{sub_task.id}_worker_search",
             label="search",
@@ -42,7 +43,7 @@ class ManagerWorkerCoordinator(Coordinator):
         if search_res.success and search_res.content:
             worker_context["worker_search"] = search_res.content
 
-        analysis_worker = AnalysisAgent(provider=self._provider, config=self._config)
+        analysis_worker = self.prepare_agent(AnalysisAgent(provider=self._provider, config=self._config))
         analysis_task = SubTask(
             id=f"{sub_task.id}_worker_analysis",
             label="analyze",
@@ -51,7 +52,7 @@ class ManagerWorkerCoordinator(Coordinator):
         analysis_res = analysis_worker.run(analysis_task, worker_context, bus=bus)
 
         # Manager synthesis
-        manager = WriterAgent(provider=self._provider, config=self._config)
+        manager = self.prepare_agent(WriterAgent(provider=self._provider, config=self._config))
         mgr_context = dict(context)
         mgr_context["search_worker_output"] = search_res.content if search_res.success else ""
         mgr_context["analysis_worker_output"] = analysis_res.content if analysis_res.success else ""
@@ -80,3 +81,17 @@ class ManagerWorkerCoordinator(Coordinator):
             "total_tokens": p_tokens + c_tokens,
         }
         return mgr_res
+
+    async def acoordinate(self, sub_task: SubTask, context: Dict[str, Any], bus: CommunicationBus) -> AgentResult:
+        search = self.prepare_agent(SearchAgent(provider=self._provider, config=self._config))
+        analysis = self.prepare_agent(AnalysisAgent(provider=self._provider, config=self._config))
+        search_task = SubTask(id=f"{sub_task.id}_worker_search", label="search", description=f"Gather information for: {sub_task.description}")
+        analysis_task = SubTask(id=f"{sub_task.id}_worker_analysis", label="analyze", description=f"Analyze: {sub_task.description}")
+        search_res, analysis_res = await asyncio.gather(search.arun(search_task, context, bus), analysis.arun(analysis_task, context, bus))
+        manager = self.prepare_agent(WriterAgent(provider=self._provider, config=self._config))
+        mgr_context = {**context, "search_worker_output": search_res.content, "analysis_worker_output": analysis_res.content}
+        result = await manager.arun(SubTask(id=sub_task.id, label="write", description=f"Synthesize findings for: {sub_task.description}"), mgr_context, bus)
+        prompt = sum(r.token_usage.get("prompt_tokens", 0) for r in (search_res, analysis_res, result))
+        completion = sum(r.token_usage.get("completion_tokens", 0) for r in (search_res, analysis_res, result))
+        result.token_usage = {"prompt_tokens": prompt, "completion_tokens": completion, "total_tokens": prompt + completion}
+        return result

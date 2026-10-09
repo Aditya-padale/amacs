@@ -28,8 +28,8 @@ class DebateCoordinator(Coordinator):
         context: Dict[str, Any],
         bus: CommunicationBus,
     ) -> AgentResult:
-        proposer = WriterAgent(provider=self._provider, config=self._config)
-        critic = AnalysisAgent(provider=self._provider, config=self._config)
+        proposer = self.prepare_agent(WriterAgent(provider=self._provider, config=self._config))
+        critic = self.prepare_agent(AnalysisAgent(provider=self._provider, config=self._config))
 
         # Step 1: Initial proposal
         prop_res = proposer.run(sub_task, context, bus=bus)
@@ -86,3 +86,24 @@ class DebateCoordinator(Coordinator):
                 "total_tokens": p_tokens + c_tokens,
             },
         )
+
+    async def acoordinate(self, sub_task: SubTask, context: Dict[str, Any], bus: CommunicationBus) -> AgentResult:
+        proposer = self.prepare_agent(WriterAgent(provider=self._provider, config=self._config))
+        critic = self.prepare_agent(AnalysisAgent(provider=self._provider, config=self._config))
+        prop_res = await proposer.arun(sub_task, context, bus=bus)
+        if not prop_res.success:
+            return prop_res
+        critique_task = SubTask(id=f"{sub_task.id}_critique", label="analyze", description=f"Critique:\n{prop_res.content}")
+        crit_res = await critic.arun(critique_task, context, bus=bus)
+        messages = [Message(role="system", content="Reconcile the proposal and critique."), Message(role="user", content=f"Proposal:\n{prop_res.content}\n\nCritique:\n{crit_res.content}")]
+        try:
+            response = await self._provider.achat(messages)
+            content = response.content
+            usage = response.usage
+        except Exception:
+            content, usage = prop_res.content, {}
+        if bus:
+            bus.publish(sub_task.id, content, writer="debate_consensus")
+        prompt = prop_res.token_usage.get("prompt_tokens", 0) + crit_res.token_usage.get("prompt_tokens", 0) + usage.get("prompt_tokens", 0)
+        completion = prop_res.token_usage.get("completion_tokens", 0) + crit_res.token_usage.get("completion_tokens", 0) + usage.get("completion_tokens", 0)
+        return AgentResult(sub_task.id, "debate_consensus", content, token_usage={"prompt_tokens": prompt, "completion_tokens": completion, "total_tokens": prompt + completion}, metadata={"model": getattr(response, "model", "unknown") if 'response' in locals() else "unknown"})

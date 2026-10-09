@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import concurrent.futures
 import logging
 import time
 from abc import ABC, abstractmethod
@@ -13,6 +14,7 @@ from amacs.config import AMACSConfig
 from amacs.context_builder import ContextBuilder
 from amacs.exceptions import (
     RETRYABLE_ERRORS,
+    AgentTimeoutError,
     LLMProviderError,
     is_retryable_provider_error,
 )
@@ -72,10 +74,21 @@ class BaseAgent(ABC):
         self._config = config
         self._metrics = MetricsRecorder()
         self._tracer: Optional[Tracer] = None
+        self._response_cache: Any = None
+        self._model_override: Optional[str] = None
+        self._model_fallback_index: int = -1
 
     def attach_tracer(self, tracer: Tracer) -> None:
         """Attach the execution tracer owned by the current pipeline run."""
         self._tracer = tracer
+
+    def attach_cache(self, cache: Any) -> None:
+        """Attach the pipeline-owned response cache (one cache per run)."""
+        self._response_cache = cache
+
+    def set_model_override(self, model: str) -> None:
+        """Select a concrete fallback model for later calls without mutating config."""
+        self._model_override = model
 
     # ── Subclass hooks ────────────────────────────────────────────────
 
@@ -104,11 +117,24 @@ class BaseAgent(ABC):
             builder = ContextBuilder(max_tokens=max_tokens)
             allowed = set(sub_task.dependencies)
             allowed.add("original_input")
-            ctx_str = builder.build_context_string(
-                context, exclude_key=sub_task.id, allowed_keys=list(allowed)
-            )
+            if self._config and self._config.summarize_context:
+                def _summarize(text: str) -> str:
+                    response = self._provider.chat([
+                        Message(role="system", content="Summarize context faithfully, retaining decisions, facts, and constraints."),
+                        Message(role="user", content=text),
+                    ], max_tokens=max(64, (max_tokens or ContextBuilder.DEFAULT_MAX_TOKENS) // 2))
+                    return response.content
+                ctx_str = builder.summarize_then_build(
+                    context, _summarize, exclude_key=sub_task.id, allowed_keys=list(allowed)
+                )
+            else:
+                ctx_str = builder.build_context_string(
+                    context, exclude_key=sub_task.id, allowed_keys=list(allowed)
+                )
             if ctx_str:
                 parts.append(ctx_str)
+            if builder.was_truncated and self._tracer:
+                self._tracer.record_event("context_truncated", builder.truncation_record or {}, task=sub_task.id)
         return "\n\n".join(parts)
 
     # ── Public API ────────────────────────────────────────────────────
@@ -204,7 +230,7 @@ class BaseAgent(ABC):
         from amacs.cache import ResponseCache
         from amacs.strategy import StrategyPolicy
 
-        model = (
+        model = self._model_override or (
             StrategyPolicy.resolve_model(
                 self._config.strategy.value if hasattr(self._config.strategy, "value") else str(self._config.strategy),
                 self._provider.name(),
@@ -226,12 +252,15 @@ class BaseAgent(ABC):
         # Check Cache
         cache_enabled = bool(self._config and self._config.cache)
         cache_path = self._config.cache if (self._config and isinstance(self._config.cache, str)) else None
-        cache_inst = ResponseCache(enabled=cache_enabled, filepath=cache_path) if cache_enabled else None
+        cache_inst = self._response_cache or (ResponseCache(enabled=cache_enabled, filepath=cache_path) if cache_enabled else None)
+        max_tokens = (rules.max_tokens or 2048) if self._config and self._config.strategy else 2048
 
         if cache_inst:
-            ckey = ResponseCache.compute_key(messages, provider=self._provider.name(), model=model)
+            ckey = ResponseCache.compute_key(messages, provider=self._provider.name(), model=model, temperature=0.7, timeout=timeout, max_tokens=max_tokens)
             cached_resp = cache_inst.get(ckey)
             if cached_resp:
+                if self._tracer:
+                    self._tracer.record_event("cache_hit", {"provider": self._provider.name(), "model": cached_resp.model}, task=sub_task.id)
                 return AgentResult(
                     sub_task_id=sub_task.id,
                     agent_name=self.agent_type,
@@ -241,28 +270,36 @@ class BaseAgent(ABC):
                     metadata={"model": cached_resp.model, "cached": True},
                 )
 
-        def _do_call(msgs: list[Message], temp: float = 0.7) -> LLMResponse:
+        def _do_call(msgs: list[Message], temp: float = 0.7, **call_kwargs: Any) -> LLMResponse:
             span = self._tracer.start_span(
                 f"{self.agent_type}:{sub_task.id}:llm",
                 "llm_call",
                 {"agent": self.agent_type, "task": sub_task.id, "model": model},
             ) if self._tracer else None
             try:
-                if timeout is not None and timeout > 0:
-                    import concurrent.futures
-
-                    from amacs.exceptions import AgentTimeoutError
-
-                    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
-                        fut = executor.submit(self._provider.chat, msgs, model=model, temperature=temp, timeout=timeout)
-                        try:
-                            response = fut.result(timeout=timeout)
-                        except concurrent.futures.TimeoutError:
-                            raise AgentTimeoutError(
-                                f"Agent '{self.agent_type}' for sub-task '{sub_task.id}' timed out after {timeout}s"
-                            ) from None
-                else:
-                    response = self._provider.chat(msgs, model=model, temperature=temp, timeout=timeout)
+                models_to_try = [model] + [m for m in (self._config.fallback_models or []) if m != model] if self._config else [model]
+                for selected_model in models_to_try:
+                    try:
+                        if timeout is not None and timeout > 0:
+                            # Do not use the context manager here: its implicit
+                            # shutdown(wait=True) turns a timeout into a wait for the
+                            # blocked worker. Python cannot kill a running thread, but
+                            # the caller must be released at the configured deadline.
+                            executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+                            fut = executor.submit(self._provider.chat, msgs, model=selected_model, temperature=temp, max_tokens=max_tokens, timeout=timeout, **call_kwargs)
+                            try:
+                                response = fut.result(timeout=timeout)
+                            except concurrent.futures.TimeoutError:
+                                fut.cancel()
+                                raise AgentTimeoutError(f"Agent '{self.agent_type}' for sub-task '{sub_task.id}' timed out after {timeout}s") from None
+                            finally:
+                                executor.shutdown(wait=False, cancel_futures=True)
+                        else:
+                            response = self._provider.chat(msgs, model=selected_model, temperature=temp, max_tokens=max_tokens, timeout=timeout, **call_kwargs)
+                        break
+                    except Exception:
+                        if selected_model == models_to_try[-1]:
+                            raise
             except Exception as exc:
                 if span and self._tracer:
                     self._tracer.end_span(span, {"success": False, "error": str(exc)})
@@ -271,9 +308,31 @@ class BaseAgent(ABC):
                 self._tracer.end_span(span, {"success": True, "total_tokens": response.usage.get("total_tokens", 0)})
             return response
 
-        resp = _do_call(messages)
+        registry = getattr(self, "tool_registry", None)
+        tool_defs = [{"type": "function", "function": tool.to_dict()} for tool in registry.list_tools()] if registry else []
+        resp = _do_call(messages, tools=tool_defs) if tool_defs else _do_call(messages)
+        # The model, rather than the agent, chooses whether a registered tool is used.
+        for step in range(getattr(self._config, "max_tool_steps", getattr(self, "max_tool_steps", 0))):
+            calls = resp.tool_calls or []
+            if not calls or not registry:
+                break
+            for call in calls:
+                import json
+                tool = registry.get(str(call.get("name", "")))
+                try:
+                    arguments = call.get("arguments", {})
+                    arguments = json.loads(arguments) if isinstance(arguments, str) else arguments
+                    output = tool.execute(**arguments) if tool else "Error: unknown tool"
+                except Exception as exc:
+                    output = f"Error executing tool: {exc}"
+                messages.append(Message(role="tool", content=str(output)))
+                if bus:
+                    bus.publish(f"{sub_task.id}_tool_step_{step + 1}", output, writer="tool")
+                if self._tracer:
+                    self._tracer.record_event("tool_call", {"tool": call.get("name"), "step": step + 1}, task=sub_task.id)
+            resp = _do_call(messages, tools=tool_defs)
         if cache_inst:
-            ckey = ResponseCache.compute_key(messages, provider=self._provider.name(), model=model)
+            ckey = ResponseCache.compute_key(messages, provider=self._provider.name(), model=model, temperature=0.7, timeout=timeout, max_tokens=max_tokens)
             cache_inst.set(ckey, resp)
 
         content = resp.content
@@ -377,7 +436,7 @@ class BaseAgent(ABC):
         from amacs.cache import ResponseCache
         from amacs.strategy import StrategyPolicy
 
-        model = (
+        model = self._model_override or (
             StrategyPolicy.resolve_model(
                 self._config.strategy.value if hasattr(self._config.strategy, "value") else str(self._config.strategy),
                 self._provider.name(),
@@ -399,10 +458,11 @@ class BaseAgent(ABC):
         # Check Cache
         cache_enabled = bool(self._config and self._config.cache)
         cache_path = self._config.cache if (self._config and isinstance(self._config.cache, str)) else None
-        cache_inst = ResponseCache(enabled=cache_enabled, filepath=cache_path) if cache_enabled else None
+        cache_inst = self._response_cache or (ResponseCache(enabled=cache_enabled, filepath=cache_path) if cache_enabled else None)
+        max_tokens = (rules.max_tokens or 2048) if self._config and self._config.strategy else 2048
 
         if cache_inst:
-            ckey = ResponseCache.compute_key(messages, provider=self._provider.name(), model=model)
+            ckey = ResponseCache.compute_key(messages, provider=self._provider.name(), model=model, temperature=0.7, timeout=timeout, max_tokens=max_tokens)
             cached_resp = cache_inst.get(ckey)
             if cached_resp:
                 return AgentResult(
@@ -414,29 +474,30 @@ class BaseAgent(ABC):
                     metadata={"model": cached_resp.model, "cached": True},
                 )
 
-        async def _do_acall(msgs: list[Message], temp: float = 0.7) -> LLMResponse:
+        async def _do_acall(msgs: list[Message], temp: float = 0.7, **call_kwargs: Any) -> LLMResponse:
             span = self._tracer.start_span(
                 f"{self.agent_type}:{sub_task.id}:llm",
                 "llm_call",
                 {"agent": self.agent_type, "task": sub_task.id, "model": model},
             ) if self._tracer else None
             try:
-                if timeout is not None and timeout > 0:
-                    import asyncio
-
-                    from amacs.exceptions import AgentTimeoutError
-
+                models_to_try = [model] + [m for m in (self._config.fallback_models or []) if m != model] if self._config else [model]
+                for selected_model in models_to_try:
                     try:
-                        response = await asyncio.wait_for(
-                            self._provider.achat(msgs, model=model, temperature=temp, timeout=timeout),
-                            timeout=timeout,
-                        )
-                    except asyncio.TimeoutError:
-                        raise AgentTimeoutError(
-                            f"Agent '{self.agent_type}' for sub-task '{sub_task.id}' timed out after {timeout}s"
-                        ) from None
-                else:
-                    response = await self._provider.achat(msgs, model=model, temperature=temp, timeout=timeout)
+                        if timeout is not None and timeout > 0:
+                            import asyncio
+                            try:
+                                response = await asyncio.wait_for(
+                                    self._provider.achat(msgs, model=selected_model, temperature=temp, max_tokens=max_tokens, timeout=timeout, **call_kwargs), timeout=timeout,
+                                )
+                            except asyncio.TimeoutError:
+                                raise AgentTimeoutError(f"Agent '{self.agent_type}' for sub-task '{sub_task.id}' timed out after {timeout}s") from None
+                        else:
+                            response = await self._provider.achat(msgs, model=selected_model, temperature=temp, max_tokens=max_tokens, timeout=timeout, **call_kwargs)
+                        break
+                    except Exception:
+                        if selected_model == models_to_try[-1]:
+                            raise
             except Exception as exc:
                 if span and self._tracer:
                     self._tracer.end_span(span, {"success": False, "error": str(exc)})
@@ -445,9 +506,30 @@ class BaseAgent(ABC):
                 self._tracer.end_span(span, {"success": True, "total_tokens": response.usage.get("total_tokens", 0)})
             return response
 
-        resp = await _do_acall(messages)
+        registry = getattr(self, "tool_registry", None)
+        tool_defs = [{"type": "function", "function": tool.to_dict()} for tool in registry.list_tools()] if registry else []
+        resp = await (_do_acall(messages, tools=tool_defs) if tool_defs else _do_acall(messages))
+        for step in range(getattr(self._config, "max_tool_steps", getattr(self, "max_tool_steps", 0))):
+            calls = resp.tool_calls or []
+            if not calls or not registry:
+                break
+            for call in calls:
+                import json
+                tool = registry.get(str(call.get("name", "")))
+                try:
+                    arguments = call.get("arguments", {})
+                    arguments = json.loads(arguments) if isinstance(arguments, str) else arguments
+                    output = await tool.aexecute(**arguments) if tool else "Error: unknown tool"
+                except Exception as exc:
+                    output = f"Error executing tool: {exc}"
+                messages.append(Message(role="tool", content=str(output)))
+                if bus:
+                    bus.publish(f"{sub_task.id}_tool_step_{step + 1}", output, writer="tool")
+                if self._tracer:
+                    self._tracer.record_event("tool_call", {"tool": call.get("name"), "step": step + 1}, task=sub_task.id)
+            resp = await _do_acall(messages, tools=tool_defs)
         if cache_inst:
-            ckey = ResponseCache.compute_key(messages, provider=self._provider.name(), model=model)
+            ckey = ResponseCache.compute_key(messages, provider=self._provider.name(), model=model, temperature=0.7, timeout=timeout, max_tokens=max_tokens)
             cache_inst.set(ckey, resp)
 
         content = resp.content

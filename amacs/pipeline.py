@@ -13,6 +13,7 @@ from amacs.adaptive.monitor import Monitor
 from amacs.adaptive.reconfigurator import Reconfigurator
 from amacs.agents.base_agent import AgentResult, BaseAgent
 from amacs.aggregation import Aggregator
+from amacs.cache import ResponseCache
 from amacs.communication import CommunicationBus
 from amacs.config import AMACSConfig
 from amacs.executor import WaveExecutor
@@ -38,6 +39,7 @@ class Pipeline:
         self.config = config
         self.provider = provider or get_provider(config.llm_provider)
         self._tracer: Optional[Tracer] = None
+        self._cache: Optional[ResponseCache] = None
 
     def _prepare(
         self,
@@ -53,32 +55,42 @@ class Pipeline:
         Monitor | None,
         Callable[[AgentResult], None],
     ]:
+        tracer = Tracer(on_event=self.config.on_event)
+        self._tracer = tracer
+        analysis_span = tracer.start_span("analyse", "pipeline_stage")
         # 1. Analyse
         analyzer = TaskAnalyzer()
         profile = analyzer.analyze(func, args, kwargs)
+        tracer.end_span(analysis_span, {"domain": profile.domain})
         logger.info("Task profile: domain=%s, complexity=%.2f", profile.domain, profile.complexity)
 
         # 2. Decompose (planner="template" | "llm")
+        decompose_span = tracer.start_span("decompose", "pipeline_stage")
         if self.config.planner == "llm":
             from amacs.orchestrator.llm_decomposer import LLMTaskDecomposer
             decomposer: Any = LLMTaskDecomposer(provider=self.provider, config=self.config)
         else:
             decomposer = TaskDecomposer()
         sub_tasks = decomposer.decompose(profile)
+        tracer.end_span(decompose_span, {"task_count": len(sub_tasks)})
         logger.info("Decomposed into %d sub-tasks", len(sub_tasks))
 
         # 3. Select agents
         selector = AgentSelector(provider=self.provider, config=self.config)
         agents = selector.select(sub_tasks)
-        tracer = Tracer(on_event=self.config.on_event)
-        self._tracer = tracer
+        if self._cache is None:
+            cache_path = self.config.cache if isinstance(self.config.cache, str) else None
+            self._cache = ResponseCache(enabled=bool(self.config.cache), filepath=cache_path)
         for agent in agents.values():
             agent.attach_tracer(tracer)
+            agent.attach_cache(self._cache)
         logger.info("Agents assigned: %s", {k: v.agent_type for k, v in agents.items()})
 
         # 4. Schedule
+        schedule_span = tracer.start_span("schedule", "pipeline_stage")
         scheduler = Scheduler(config=self.config)
         plan = scheduler.plan(sub_tasks)
+        tracer.end_span(schedule_span, {"wave_count": len(plan.waves)})
         logger.info("Execution plan: %s", plan)
 
         # 5. Communication bus
@@ -186,6 +198,9 @@ class Pipeline:
         if self.config.verbose:
             amacs_res.print_communication_log()
 
+        if self.config.otel_endpoint:
+            amacs_res.trace.export_opentelemetry(self.config.otel_endpoint)
+
         return amacs_res
 
     def run(
@@ -213,21 +228,27 @@ class Pipeline:
         if self.config.mode == "debate":
             from amacs.coordination.debate import DebateCoordinator
             debate_coord = DebateCoordinator(provider=self.provider, config=self.config)
+            debate_coord.attach_runtime(self._tracer, self._cache)
             results: list[AgentResult] = []
             for st in sub_tasks:
+                span = self._tracer.start_span(st.id, "coordination_task", {"mode": "debate"}) if self._tracer else None
                 res = debate_coord.coordinate(st, bus.snapshot(), bus)
                 results.append(res)
-                if on_result is not None:
-                    on_result(res)
+                wave_executor._process_result(res, on_result)
+                if span and self._tracer:
+                    self._tracer.end_span(span, {"success": res.success, "status": "done"})
         elif self.config.mode == "manager_worker":
             from amacs.coordination.manager_worker import ManagerWorkerCoordinator
             mw_coord = ManagerWorkerCoordinator(provider=self.provider, config=self.config)
+            mw_coord.attach_runtime(self._tracer, self._cache)
             results = []
             for st in sub_tasks:
+                span = self._tracer.start_span(st.id, "coordination_task", {"mode": "manager_worker"}) if self._tracer else None
                 res = mw_coord.coordinate(st, bus.snapshot(), bus)
                 results.append(res)
-                if on_result is not None:
-                    on_result(res)
+                wave_executor._process_result(res, on_result)
+                if span and self._tracer:
+                    self._tracer.end_span(span, {"success": res.success, "status": "done"})
         else:
             results = wave_executor.execute_sync(
                 plan,
@@ -267,21 +288,27 @@ class Pipeline:
         if self.config.mode == "debate":
             from amacs.coordination.debate import DebateCoordinator
             async_debate_coord = DebateCoordinator(provider=self.provider, config=self.config)
+            async_debate_coord.attach_runtime(self._tracer, self._cache)
             results = []
             for st in sub_tasks:
-                res = async_debate_coord.coordinate(st, bus.snapshot(), bus)
+                span = self._tracer.start_span(st.id, "coordination_task", {"mode": "debate"}) if self._tracer else None
+                res = await async_debate_coord.acoordinate(st, bus.snapshot(), bus)
                 results.append(res)
-                if on_result is not None:
-                    on_result(res)
+                wave_executor._process_result(res, on_result)
+                if span and self._tracer:
+                    self._tracer.end_span(span, {"success": res.success, "status": "done"})
         elif self.config.mode == "manager_worker":
             from amacs.coordination.manager_worker import ManagerWorkerCoordinator
             async_mw_coord = ManagerWorkerCoordinator(provider=self.provider, config=self.config)
+            async_mw_coord.attach_runtime(self._tracer, self._cache)
             results = []
             for st in sub_tasks:
-                res = async_mw_coord.coordinate(st, bus.snapshot(), bus)
+                span = self._tracer.start_span(st.id, "coordination_task", {"mode": "manager_worker"}) if self._tracer else None
+                res = await async_mw_coord.acoordinate(st, bus.snapshot(), bus)
                 results.append(res)
-                if on_result is not None:
-                    on_result(res)
+                wave_executor._process_result(res, on_result)
+                if span and self._tracer:
+                    self._tracer.end_span(span, {"success": res.success, "status": "done"})
         else:
             results = await wave_executor.execute_async(
                 plan,

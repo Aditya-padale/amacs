@@ -6,6 +6,7 @@ Concrete providers are loaded lazily so missing optional deps don't crash the im
 
 from __future__ import annotations
 
+import json
 import os
 from abc import ABC, abstractmethod
 from collections.abc import Sequence
@@ -32,6 +33,71 @@ class LLMResponse:
     model: str
     usage: Dict[str, int]  # {"prompt_tokens": …, "completion_tokens": …, "total_tokens": …}
     raw: Any = None  # provider-specific response object
+    tool_calls: Optional[List[Dict[str, Any]]] = None  # normalized {id, name, arguments}
+    structured: Any = None  # decoded structured output when the provider returns JSON
+
+
+def _value(source: Any, key: str, default: Any = None) -> Any:
+    """Read a field from either an SDK object or a mapping."""
+    if isinstance(source, dict):
+        return source.get(key, default)
+    return getattr(source, key, default)
+
+
+def _normalize_tool_calls(calls: Any) -> Optional[List[Dict[str, Any]]]:
+    """Normalize SDK-specific tool call objects into the public AMACS shape."""
+    if not calls:
+        return None
+    normalized: List[Dict[str, Any]] = []
+    for index, call in enumerate(calls):
+        function = _value(call, "function", call)
+        name = _value(function, "name", _value(call, "name", ""))
+        arguments = _value(function, "arguments", _value(call, "arguments", {}))
+        if not isinstance(arguments, (str, dict, list)):
+            arguments = str(arguments)
+        normalized.append({"id": _value(call, "id", f"tool_call_{index}"), "name": name, "arguments": arguments})
+    return normalized
+
+
+def _structured_value(content: str) -> Any:
+    try:
+        return json.loads(content)
+    except (TypeError, ValueError):
+        return None
+
+
+def _schema_parameters(kwargs: Dict[str, Any], provider: str) -> Dict[str, Any]:
+    """Translate the common ``output_schema`` option to provider parameters."""
+    schema = kwargs.pop("output_schema", None)
+    if schema is None:
+        return kwargs
+    if hasattr(schema, "model_json_schema"):
+        schema = schema.model_json_schema()
+    elif not isinstance(schema, dict):
+        schema = getattr(schema, "schema", dict)()
+    if provider == "openai":
+        kwargs["response_format"] = {"type": "json_schema", "json_schema": {"name": "amacs_output", "strict": True, "schema": schema}}
+    elif provider == "ollama":
+        kwargs["format"] = schema
+    elif provider == "gemini":
+        kwargs["response_schema"] = schema
+        kwargs["response_mime_type"] = "application/json"
+    else:
+        kwargs["output_schema"] = schema
+    return kwargs
+
+
+def _usage(source: Any) -> Dict[str, int]:
+    usage = _value(source, "usage", {}) or {}
+    prompt = _value(usage, "prompt_tokens", _value(usage, "input_tokens", 0)) or 0
+    completion = _value(usage, "completion_tokens", _value(usage, "output_tokens", 0)) or 0
+    total = _value(usage, "total_tokens", prompt + completion) or prompt + completion
+    return {"prompt_tokens": int(prompt), "completion_tokens": int(completion), "total_tokens": int(total)}
+
+
+def _response(content: Any, model: str, usage: Dict[str, int], raw: Any = None, tool_calls: Any = None) -> LLMResponse:
+    text = content if isinstance(content, str) else json.dumps(content) if content is not None else ""
+    return LLMResponse(text, model, usage, raw=raw, tool_calls=_normalize_tool_calls(tool_calls), structured=_structured_value(text))
 
 
 # ── Abstract base ─────────────────────────────────────────────────────────
@@ -110,20 +176,11 @@ class OpenAIProvider(LLMProvider):
         }
         if timeout is not None:
             params["timeout"] = timeout
-        params.update(kwargs)
+        params.update(_schema_parameters(kwargs, "openai"))
         try:
             resp: Any = self._client.chat.completions.create(**params)
-            usage = resp.usage
-            return LLMResponse(
-                content=resp.choices[0].message.content or "",
-                model=resp.model,
-                usage={
-                    "prompt_tokens": usage.prompt_tokens if usage else 0,
-                    "completion_tokens": usage.completion_tokens if usage else 0,
-                    "total_tokens": usage.total_tokens if usage else 0,
-                },
-                raw=resp,
-            )
+            message = resp.choices[0].message
+            return _response(_value(message, "content", ""), _value(resp, "model", model_name), _usage(resp), resp, _value(message, "tool_calls"))
         except Exception as exc:
             raise LLMProviderError(f"OpenAI call failed: {exc}") from exc
 
@@ -146,20 +203,11 @@ class OpenAIProvider(LLMProvider):
         }
         if timeout is not None:
             params["timeout"] = timeout
-        params.update(kwargs)
+        params.update(_schema_parameters(kwargs, "openai"))
         try:
             resp: Any = await self._async_client.chat.completions.create(**params)
-            usage = resp.usage
-            return LLMResponse(
-                content=resp.choices[0].message.content or "",
-                model=resp.model,
-                usage={
-                    "prompt_tokens": usage.prompt_tokens if usage else 0,
-                    "completion_tokens": usage.completion_tokens if usage else 0,
-                    "total_tokens": usage.total_tokens if usage else 0,
-                },
-                raw=resp,
-            )
+            message = resp.choices[0].message
+            return _response(_value(message, "content", ""), _value(resp, "model", model_name), _usage(resp), resp, _value(message, "tool_calls"))
         except Exception as exc:
             raise LLMProviderError(f"OpenAI async call failed: {exc}") from exc
 
@@ -214,20 +262,14 @@ class AnthropicProvider(LLMProvider):
             params["system"] = system_msg
         if timeout is not None:
             params["timeout"] = timeout
-        params.update(kwargs)
+        params.update(_schema_parameters(kwargs, "anthropic"))
 
         try:
             resp: Any = self._client.messages.create(**params)
-            return LLMResponse(
-                content=resp.content[0].text if resp.content else "",
-                model=resp.model,
-                usage={
-                    "prompt_tokens": resp.usage.input_tokens,
-                    "completion_tokens": resp.usage.output_tokens,
-                    "total_tokens": resp.usage.input_tokens + resp.usage.output_tokens,
-                },
-                raw=resp,
-            )
+            blocks = _value(resp, "content", []) or []
+            text = "".join(_value(block, "text", "") for block in blocks if _value(block, "type", "text") != "tool_use")
+            tools = [block for block in blocks if _value(block, "type", "") == "tool_use"]
+            return _response(text, _value(resp, "model", model_name), _usage({"usage": {"input_tokens": _value(_value(resp, "usage", {}), "input_tokens", 0), "output_tokens": _value(_value(resp, "usage", {}), "output_tokens", 0)}}), resp, tools)
         except Exception as exc:
             raise LLMProviderError(f"Anthropic call failed: {exc}") from exc
 
@@ -260,20 +302,14 @@ class AnthropicProvider(LLMProvider):
             params["system"] = system_msg
         if timeout is not None:
             params["timeout"] = timeout
-        params.update(kwargs)
+        params.update(_schema_parameters(kwargs, "anthropic"))
 
         try:
             resp: Any = await self._async_client.messages.create(**params)
-            return LLMResponse(
-                content=resp.content[0].text if resp.content else "",
-                model=resp.model,
-                usage={
-                    "prompt_tokens": resp.usage.input_tokens,
-                    "completion_tokens": resp.usage.output_tokens,
-                    "total_tokens": resp.usage.input_tokens + resp.usage.output_tokens,
-                },
-                raw=resp,
-            )
+            blocks = _value(resp, "content", []) or []
+            text = "".join(_value(block, "text", "") for block in blocks if _value(block, "type", "text") != "tool_use")
+            tools = [block for block in blocks if _value(block, "type", "") == "tool_use"]
+            return _response(text, _value(resp, "model", model_name), _usage({"usage": {"input_tokens": _value(_value(resp, "usage", {}), "input_tokens", 0), "output_tokens": _value(_value(resp, "usage", {}), "output_tokens", 0)}}), resp, tools)
         except Exception as exc:
             raise LLMProviderError(f"Anthropic async call failed: {exc}") from exc
 
@@ -316,19 +352,11 @@ class OllamaProvider(LLMProvider):
                 model=model_name,
                 messages=[{"role": m.role, "content": m.content} for m in messages],
                 options={"temperature": temperature, "num_predict": max_tokens},
-                **kwargs,
+                **_schema_parameters(kwargs, "ollama"),
             )
-            return LLMResponse(
-                content=resp.get("message", {}).get("content", ""),
-                model=model_name,
-                usage={
-                    "prompt_tokens": resp.get("prompt_eval_count", 0),
-                    "completion_tokens": resp.get("eval_count", 0),
-                    "total_tokens": resp.get("prompt_eval_count", 0)
-                    + resp.get("eval_count", 0),
-                },
-                raw=resp,
-            )
+            usage = {"prompt_tokens": resp.get("prompt_eval_count", 0), "completion_tokens": resp.get("eval_count", 0), "total_tokens": resp.get("prompt_eval_count", 0) + resp.get("eval_count", 0)}
+            message = resp.get("message", {})
+            return _response(message.get("content", ""), model_name, usage, resp, message.get("tool_calls"))
         except Exception as exc:
             raise LLMProviderError(f"Ollama call failed: {exc}") from exc
 
@@ -348,19 +376,11 @@ class OllamaProvider(LLMProvider):
                 model=model_name,
                 messages=[{"role": m.role, "content": m.content} for m in messages],
                 options={"temperature": temperature, "num_predict": max_tokens},
-                **kwargs,
+                **_schema_parameters(kwargs, "ollama"),
             )
-            return LLMResponse(
-                content=resp.get("message", {}).get("content", ""),
-                model=model_name,
-                usage={
-                    "prompt_tokens": resp.get("prompt_eval_count", 0),
-                    "completion_tokens": resp.get("eval_count", 0),
-                    "total_tokens": resp.get("prompt_eval_count", 0)
-                    + resp.get("eval_count", 0),
-                },
-                raw=resp,
-            )
+            usage = {"prompt_tokens": resp.get("prompt_eval_count", 0), "completion_tokens": resp.get("eval_count", 0), "total_tokens": resp.get("prompt_eval_count", 0) + resp.get("eval_count", 0)}
+            message = resp.get("message", {})
+            return _response(message.get("content", ""), model_name, usage, resp, message.get("tool_calls"))
         except Exception as exc:
             raise LLMProviderError(f"Ollama async call failed: {exc}") from exc
 
@@ -415,7 +435,7 @@ class GeminiProvider(LLMProvider):
                 temperature=temperature,
                 max_output_tokens=max_tokens,
                 system_instruction=system_instruction,
-                **kwargs,
+                **_schema_parameters(kwargs, "gemini"),
             )
             resp = self._client.models.generate_content(
                 model=model_name,
@@ -425,16 +445,10 @@ class GeminiProvider(LLMProvider):
             usage_meta = getattr(resp, "usage_metadata", None)
             prompt_tokens = getattr(usage_meta, "prompt_token_count", 0) or 0
             completion_tokens = getattr(usage_meta, "candidates_token_count", 0) or 0
-            return LLMResponse(
-                content=resp.text or "",
-                model=model_name,
-                usage={
-                    "prompt_tokens": prompt_tokens,
-                    "completion_tokens": completion_tokens,
-                    "total_tokens": prompt_tokens + completion_tokens,
-                },
-                raw=resp,
-            )
+            calls = []
+            for candidate in getattr(resp, "candidates", []) or []:
+                calls.extend([part.function_call for part in getattr(candidate.content, "parts", []) if getattr(part, "function_call", None)])
+            return _response(resp.text or "", model_name, {"prompt_tokens": prompt_tokens, "completion_tokens": completion_tokens, "total_tokens": prompt_tokens + completion_tokens}, resp, calls)
         except Exception as exc:
             raise LLMProviderError(f"Gemini call failed: {exc}") from exc
 
@@ -455,7 +469,7 @@ class GeminiProvider(LLMProvider):
                 temperature=temperature,
                 max_output_tokens=max_tokens,
                 system_instruction=system_instruction,
-                **kwargs,
+                **_schema_parameters(kwargs, "gemini"),
             )
             resp = await self._client.aio.models.generate_content(
                 model=model_name,
@@ -465,16 +479,10 @@ class GeminiProvider(LLMProvider):
             usage_meta = getattr(resp, "usage_metadata", None)
             prompt_tokens = getattr(usage_meta, "prompt_token_count", 0) or 0
             completion_tokens = getattr(usage_meta, "candidates_token_count", 0) or 0
-            return LLMResponse(
-                content=resp.text or "",
-                model=model_name,
-                usage={
-                    "prompt_tokens": prompt_tokens,
-                    "completion_tokens": completion_tokens,
-                    "total_tokens": prompt_tokens + completion_tokens,
-                },
-                raw=resp,
-            )
+            calls = []
+            for candidate in getattr(resp, "candidates", []) or []:
+                calls.extend([part.function_call for part in getattr(candidate.content, "parts", []) if getattr(part, "function_call", None)])
+            return _response(resp.text or "", model_name, {"prompt_tokens": prompt_tokens, "completion_tokens": completion_tokens, "total_tokens": prompt_tokens + completion_tokens}, resp, calls)
         except Exception as exc:
             raise LLMProviderError(f"Gemini async call failed: {exc}") from exc
 

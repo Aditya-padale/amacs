@@ -110,25 +110,43 @@ overridden with `llm_model` or per-agent `models={...}`. Verify provider model
 availability with the provider's current official documentation before making
 live calls; this project does not assert that every default remains current.
 
-## Offline Benchmark Result
+Provider responses expose normalized content, usage, structured JSON, and tool
+calls (`{id, name, arguments}`). Pass `output_schema` with a Pydantic model for
+provider-native JSON guidance; tool execution is traced and bounded by
+`max_tool_steps`. Provider SDK tests use mocks and `FakeProvider`, so API keys
+are never required by normal tests.
 
-The checked-in `benchmarks/results/report.md` is a recorded fixture run with
-9 cases per cell and a deterministic stub provider. It is a recovery and
-overhead smoke test, not evidence of model quality:
+Tracing records pipeline stages, waves, nested coordination, provider calls,
+tools, cache hits, context truncation, retries, budgets, and adaptation actions.
+OpenTelemetry export is optional and never required for local execution.
 
-| system | fault rate | adaptive | success | recovery | mean latency (s) |
-|---|---:|:---:|---:|---:|---:|
-| single-call | 0.00 | no | 1.000 | 0.000 | 0.000008 |
-| amacs | 0.00 | no | 1.000 | 0.000 | 0.059296 |
-| amacs | 0.00 | yes | 1.000 | 0.000 | 0.014351 |
-| amacs | 0.25 | no | 1.000 | 1.000 | 0.456765 |
-| amacs | 0.25 | yes | 1.000 | 1.000 | 0.459288 |
-| amacs | 0.50 | no | 1.000 | 1.000 | 0.900496 |
-| amacs | 0.50 | yes | 1.000 | 1.000 | 1.183298 |
+## Benchmarks
+
+The checked-in `benchmarks/results/report.md` is a deterministic fixture run
+with the stub provider. It is a recovery and overhead smoke test, not evidence
+of model quality. Every report includes mean, standard deviation, and 95% CI
+for latency, success, cost, and token usage, plus recovery rate.
+
+| system | runs | success mean | success std | success CI95 | recovery rate | latency mean (s) | latency std | latency CI95 | cost mean | tokens mean |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+| B0-B5 | see `benchmarks/results/report.md` | recorded fixture statistics | | | | | | | | |
 
 The fixture's success predicate is string containment against expected fixture
 text. It does not evaluate correctness, factuality, cost quality, or user
-preference. Reproduce it with `make bench-fixture`.
+preference. Reproduce it with `make bench-fixture`. Full runs require a
+locally available dataset and the selected provider SDK; they may require API
+credentials and are never part of normal tests or CI:
+
+```bash
+python -m benchmarks.run --full --dataset reasoning --provider openai \
+    --systems B0,B1,B2,B3,B4,B5 --repetitions 3
+python -m benchmarks.run --full --dataset coding --provider ollama \
+    --systems B2,B5 --repetitions 2
+```
+
+Use `--ablation adaptation`, `--ablation coordination`, `--ablation caching`,
+or `--ablation strategy` to label reproducible ablation runs. Dataset provenance
+and licensing requirements are documented in `benchmarks/datasets/README.md`.
 
 ## Package Structure
 
@@ -158,9 +176,9 @@ tests/                   offline regression and behavioral tests
 make verify
 ```
 
-The verification target runs Ruff, mypy, pytest with coverage, an offline
-wheel build, a fresh virtual-environment install, the CLI smoke test, the
-fixture benchmark, and the example. It does not make live API calls.
+The verification target runs Ruff, mypy, pytest with coverage, the fixture
+benchmark, an offline wheel build, a fresh virtual-environment install, the
+CLI smoke test, and the example. It does not make live API calls.
 
 For the research context and known trade-offs, see
 [`docs/architecture.md`](docs/architecture.md),

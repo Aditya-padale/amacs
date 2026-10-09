@@ -1,0 +1,12 @@
+[
+  {
+    "id": "reasoning-1",
+    "task": "Explain why adding insulation reduces heat transfer.",
+    "expected": "reduces heat transfer"
+  },
+  {
+    "id": "reasoning-2",
+    "task": "Give the conclusion: all mammals breathe air, and whales are mammals, so whales breathe air.",
+    "expected": "whales breathe air"
+  }
+]

@@ -18,7 +18,7 @@ bench-fixture:
 bench-full:
 	python -m benchmarks.run --full
 
-verify: lint typecheck test-cov
+verify: lint typecheck test-cov bench-fixture
 	rm -rf dist/ build/ *.egg-info .venv_verify
 	python -m build --no-isolation
 	python -m venv --system-site-packages .venv_verify

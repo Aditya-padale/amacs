@@ -22,6 +22,7 @@ from amacs.exceptions import OrchestrationError
 from amacs.orchestrator.scheduler import ExecutionPlan
 from amacs.pricing import calculate_cost
 from amacs.results import AdaptationEvent
+from amacs.strategy import StrategyPolicy
 from amacs.tracing import Tracer
 
 logger = logging.getLogger("amacs.executor")
@@ -53,6 +54,7 @@ class WaveExecutor:
         self._budget_degraded: bool = False
         self.cost_by_agent: Dict[str, Dict[str, float]] = {}
         self.cost_by_stage: Dict[str, Dict[str, float]] = {}
+        self._active_wave_span: Any = None
 
     def _emit(self, event: str, **data: object) -> None:
         if self._on_event:
@@ -60,7 +62,7 @@ class WaveExecutor:
 
     def _run_agent(self, agent: BaseAgent, st: SubTask, context: Dict[str, Any], bus: CommunicationBus) -> AgentResult:
         task_id = st.id
-        span = self._tracer.start_span(task_id, "task", {"stage": st.label})
+        span = self._tracer.start_span(task_id, "task", {"stage": st.label}, parent=self._active_wave_span)
         try:
             result = agent.run(st, context, bus)
             self._tracer.end_span(span, {"success": result.success})
@@ -79,13 +81,15 @@ class WaveExecutor:
         """Execute the plan synchronously wave by wave with inter-wave adaptation."""
         all_results: List[AgentResult] = []
         context = bus.snapshot()
-        max_workers = self._config.max_agents
+        rules = StrategyPolicy.get_rules(self._config.strategy.value)
+        max_workers = max(1, min(64, int(self._config.max_agents * rules.max_concurrency_multiplier)))
 
         wave_idx = 0
         while wave_idx < len(plan.waves):
             wave = plan.waves[wave_idx]
             wave_results: List[AgentResult] = []
             wave_span = self._tracer.start_span(f"wave_{wave_idx}", "wave", {"wave": wave_idx})
+            self._active_wave_span = wave_span
 
             if wave:
                 with ThreadPoolExecutor(max_workers=max_workers) as pool:
@@ -164,13 +168,13 @@ class WaveExecutor:
                                         target_agent_id=st_id,
                                         description=f"Adapted task '{st_id}' via {act.action_type.value} ({outcome})",
                                         details={"reason": act.reason},
-                                        trigger=trigger_val,
-                                        signal_values=signal_vals,
+                                        trigger=act.params.get("trigger", "evaluation_trigger"),
+                                        signal_values=act.params.get("signal_values", {}),
                                         action=act.action_type.value,
                                         target=st_id,
                                         outcome=outcome,
                                     )
-                                    self.adaptation_events.append(event)
+                                    self._record_adaptation(event)
                                 else:
                                     trigger_val = act.params.get("trigger", "evaluation_trigger")
                                     signal_vals = act.params.get("signal_values", {})
@@ -180,13 +184,13 @@ class WaveExecutor:
                                         target_agent_id=st_id,
                                         description=f"Skipped adaptation for '{st_id}': max swaps or no alternative",
                                         details={"reason": act.reason},
-                                        trigger=trigger_val,
-                                        signal_values=signal_vals,
+                                        trigger=act.params.get("trigger", "evaluation_trigger"),
+                                        signal_values=act.params.get("signal_values", {}),
                                         action=act.action_type.value,
                                         target=st_id,
                                         outcome="skipped",
                                     )
-                                    self.adaptation_events.append(event)
+                                    self._record_adaptation(event)
                             else:
                                 reconfig_res = self._reconfigurator.apply(
                                     [act], agents, plan, remaining_wave_idx=wave_idx + 1
@@ -206,7 +210,20 @@ class WaveExecutor:
                                         target=act.target_agent_id or "system",
                                         outcome="applied",
                                     )
-                                    self.adaptation_events.append(event)
+                                    self._record_adaptation(event)
+                                for item in reconfig_res.skipped:
+                                    self._record_adaptation(AdaptationEvent(
+                                        wave_index=wave_idx,
+                                        action_type=act.action_type.value,
+                                        target_agent_id=act.target_agent_id or "system",
+                                        description=item,
+                                        details={"reason": act.reason},
+                                        trigger=trigger_val,
+                                        signal_values=signal_vals,
+                                        action=act.action_type.value,
+                                        target=act.target_agent_id or "system",
+                                        outcome="skipped",
+                                    ))
 
                 # Check critical failure
                 for r in wave_results:
@@ -220,6 +237,7 @@ class WaveExecutor:
                 all_results.extend(wave_results)
                 context = bus.snapshot()
             self._tracer.end_span(wave_span, {"result_count": len(wave_results)})
+            self._active_wave_span = None
 
             self._adapt_between_waves(wave_idx, len(plan.waves), agents, plan)
             wave_idx += 1
@@ -241,13 +259,25 @@ class WaveExecutor:
         while wave_idx < len(plan.waves):
             wave = plan.waves[wave_idx]
             wave_span = self._tracer.start_span(f"wave_{wave_idx}", "wave", {"wave": wave_idx})
+            self._active_wave_span = wave_span
             if wave:
+                rules = StrategyPolicy.get_rules(self._config.strategy.value)
+                concurrency = max(1, min(64, int(self._config.max_agents * rules.max_concurrency_multiplier)))
+                semaphore = asyncio.Semaphore(concurrency)
+                async def _bounded(
+                    agent: BaseAgent,
+                    task: Any,
+                    _semaphore: Any = semaphore,
+                    _context: Any = context,
+                ) -> AgentResult:
+                    async with _semaphore:
+                        return await self._run_async_agent(agent, task, _context, bus)
                 tasks = []
                 for st in wave:
                     agent = agents.get(st.id)
                     if agent is None:
                         continue
-                    tasks.append(self._run_async_agent(agent, st, context, bus))
+                    tasks.append(_bounded(agent, st))
 
                 raw_results = await asyncio.gather(*tasks, return_exceptions=True)
                 wave_results: List[AgentResult] = []
@@ -322,7 +352,7 @@ class WaveExecutor:
                                         target=st_id,
                                         outcome=outcome,
                                     )
-                                    self.adaptation_events.append(event)
+                                    self._record_adaptation(event)
                                 else:
                                     trigger_val = act.params.get("trigger", "evaluation_trigger")
                                     signal_vals = act.params.get("signal_values", {})
@@ -338,7 +368,7 @@ class WaveExecutor:
                                         target=st_id,
                                         outcome="skipped",
                                     )
-                                    self.adaptation_events.append(event)
+                                    self._record_adaptation(event)
                             else:
                                 reconfig_res = self._reconfigurator.apply(
                                     [act], agents, plan, remaining_wave_idx=wave_idx + 1
@@ -358,7 +388,20 @@ class WaveExecutor:
                                         target=act.target_agent_id or "system",
                                         outcome="applied",
                                     )
-                                    self.adaptation_events.append(event)
+                                    self._record_adaptation(event)
+                                for item in reconfig_res.skipped:
+                                    self._record_adaptation(AdaptationEvent(
+                                        wave_index=wave_idx,
+                                        action_type=act.action_type.value,
+                                        target_agent_id=act.target_agent_id or "system",
+                                        description=item,
+                                        details={"reason": act.reason},
+                                        trigger=trigger_val,
+                                        signal_values=signal_vals,
+                                        action=act.action_type.value,
+                                        target=act.target_agent_id or "system",
+                                        outcome="skipped",
+                                    ))
 
                 for r in wave_results:
                     if not r.success:
@@ -371,11 +414,24 @@ class WaveExecutor:
                 all_results.extend(wave_results)
                 context = bus.snapshot()
             self._tracer.end_span(wave_span, {"result_count": len(wave_results)})
+            self._active_wave_span = None
 
             self._adapt_between_waves(wave_idx, len(plan.waves), agents, plan)
             wave_idx += 1
 
         return all_results
+
+    def _record_adaptation(self, event: AdaptationEvent) -> None:
+        self.adaptation_events.append(event)
+        self._tracer.record_event(
+            "adaptation",
+            {
+                "action": event.action_type,
+                "target": event.target_agent_id,
+                "outcome": event.outcome,
+                "trigger": event.trigger,
+            },
+        )
 
     def _process_result(
         self,
@@ -454,7 +510,7 @@ class WaveExecutor:
         self, agent: BaseAgent, st: SubTask, context: Dict[str, Any], bus: CommunicationBus
     ) -> AgentResult:
         task_id = st.id
-        span = self._tracer.start_span(task_id, "task", {"stage": st.label})
+        span = self._tracer.start_span(task_id, "task", {"stage": st.label}, parent=self._active_wave_span)
         try:
             result = await agent.arun(st, context, bus)
             self._tracer.end_span(span, {"success": result.success})
@@ -499,7 +555,7 @@ class WaveExecutor:
             else:
                 desc += "Switching remaining tasks to cost-effective execution."
 
-            self.adaptation_events.append(
+            self._record_adaptation(
                 AdaptationEvent(
                     wave_index=current_wave_idx,
                     action_type="budget_degradation",

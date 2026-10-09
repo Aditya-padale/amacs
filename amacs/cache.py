@@ -30,12 +30,21 @@ class ResponseCache:
     ) -> str:
         data = {
             "provider": provider or "",
-            "messages": [m.content if hasattr(m, "content") else str(m) for m in messages],
+            # Role, content, and any message fields must all participate: two
+            # otherwise identical prompts with a different role are not equivalent.
+            "messages": [
+                {
+                    "role": getattr(m, "role", None),
+                    "content": getattr(m, "content", str(m)),
+                    "extra": getattr(m, "__dict__", {}),
+                }
+                for m in messages
+            ],
             "model": model or "",
             "temperature": temperature,
-            "kwargs": {k: str(v) for k, v in sorted(kwargs.items())},
+            "kwargs": kwargs,
         }
-        raw = json.dumps(data, sort_keys=True)
+        raw = json.dumps(data, sort_keys=True, default=str, separators=(",", ":"))
         return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
     def get(self, key: str) -> Optional[LLMResponse]:
