@@ -16,68 +16,71 @@ from amacs.orchestrator.task_analyzer import TaskProfile
 _TEMPLATES: Dict[str, List[Dict[str, Any]]] = {
     "research": [
         {"label": "search", "desc": "Gather comprehensive information on the topic",
-         "deps": [], "critical": True},
+         "after": [], "critical": True},
         {"label": "analyze", "desc": "Analyse and synthesise the gathered information",
-         "deps": ["search_0"], "critical": True},
+         "after": ["search"], "critical": True},
         {"label": "write", "desc": "Compose a well-structured report from the analysis",
-         "deps": ["analyze_1"], "critical": True},
+         "after": ["analyze"], "critical": True},
         {"label": "validate", "desc": "Fact-check and verify the final report",
-         "deps": ["write_2"], "critical": False},
+         "after": ["write"], "critical": False},
     ],
     "analysis": [
         {"label": "search", "desc": "Collect relevant data and background information",
-         "deps": [], "critical": True},
+         "after": [], "critical": True},
         {"label": "analyze", "desc": "Perform detailed analysis on the collected data",
-         "deps": ["search_0"], "critical": True},
+         "after": ["search"], "critical": True},
         {"label": "analyze", "desc": "Identify patterns, trends, and insights",
-         "deps": ["analyze_1"], "critical": True},
+         "after": ["analyze"], "critical": True},
         {"label": "write", "desc": "Summarise findings into a clear report",
-         "deps": ["analyze_2"], "critical": True},
+         "after": ["analyze"], "critical": True},
         {"label": "validate", "desc": "Verify analytical conclusions for accuracy",
-         "deps": ["write_3"], "critical": False},
+         "after": ["write"], "critical": False},
     ],
     "content_creation": [
         {"label": "search", "desc": "Research background material for the content",
-         "deps": [], "critical": True},
+         "after": [], "critical": True},
         {"label": "write", "desc": "Draft the main content piece",
-         "deps": ["search_0"], "critical": True},
+         "after": ["search"], "critical": True},
         {"label": "validate", "desc": "Review the draft for quality and accuracy",
-         "deps": ["write_1"], "critical": False},
+         "after": ["write"], "critical": False},
     ],
     "coding": [
         {"label": "search", "desc": "Research relevant APIs, libraries, and patterns",
-         "deps": [], "critical": True},
+         "after": [], "critical": True},
         {"label": "analyze", "desc": "Design the solution architecture",
-         "deps": ["search_0"], "critical": True},
+         "after": ["search"], "critical": True},
         {"label": "write", "desc": "Implement the solution",
-         "deps": ["analyze_1"], "critical": True},
+         "after": ["analyze"], "critical": True},
         {"label": "validate", "desc": "Review and test the implementation",
-         "deps": ["write_2"], "critical": True},
+         "after": ["write"], "critical": True},
     ],
     "planning": [
         {"label": "search", "desc": "Gather context and constraints",
-         "deps": [], "critical": True},
+         "after": [], "critical": True},
         {"label": "analyze", "desc": "Evaluate options and trade-offs",
-         "deps": ["search_0"], "critical": True},
+         "after": ["search"], "critical": True},
         {"label": "write", "desc": "Draft the plan document",
-         "deps": ["analyze_1"], "critical": True},
+         "after": ["analyze"], "critical": True},
         {"label": "validate", "desc": "Review plan feasibility",
-         "deps": ["write_2"], "critical": False},
+         "after": ["write"], "critical": False},
     ],
     "general": [
         {"label": "search", "desc": "Gather relevant information",
-         "deps": [], "critical": True},
+         "after": [], "critical": True},
         {"label": "analyze", "desc": "Process and analyse the information",
-         "deps": ["search_0"], "critical": True},
+         "after": ["search"], "critical": True},
         {"label": "write", "desc": "Produce the final output",
-         "deps": ["analyze_1"], "critical": True},
+         "after": ["analyze"], "critical": True},
         {"label": "validate", "desc": "Verify the output quality",
-         "deps": ["write_2"], "critical": False},
+         "after": ["write"], "critical": False},
     ],
 }
 
 
 import copy
+from collections import defaultdict
+
+from amacs.exceptions import OrchestrationError
 
 
 class TaskDecomposer:
@@ -86,10 +89,8 @@ class TaskDecomposer:
     def decompose(self, profile: TaskProfile) -> List[SubTask]:
         """Return sub-tasks as a simple DAG (list with dependency IDs)."""
         raw_template = _TEMPLATES.get(profile.domain, _TEMPLATES["general"])
-        # Deep copy to avoid mutating module-level templates
         template = copy.deepcopy(raw_template)
 
-        # Trim or extend based on estimated sub-task count
         target = profile.estimated_sub_tasks
         if target < len(template):
             template = template[:target]
@@ -98,39 +99,51 @@ class TaskDecomposer:
                 extra = {
                     "label": "search",
                     "desc": f"Gather additional information related to {sd}",
-                    "deps": [],
+                    "after": [],
                     "critical": False,
                 }
                 template.insert(1, extra)
 
-        sub_tasks: List[SubTask] = []
         task_ids: List[str] = [f"{tmpl['label']}_{idx}" for idx, tmpl in enumerate(template)]
-        valid_id_set: set[str] = set(task_ids)
+        role_to_ids: Dict[str, List[str]] = defaultdict(list)
+        for idx, tmpl in enumerate(template):
+            role_to_ids[tmpl["label"]].append(task_ids[idx])
+
+        sub_tasks: List[SubTask] = []
 
         for idx, tmpl in enumerate(template):
             task_id = task_ids[idx]
+            label = tmpl["label"]
             desc = tmpl["desc"]
             if profile.arg_summary:
                 desc = f"{desc} (context: {profile.arg_summary})"
 
-            # Sanitize and validate dependencies
-            raw_deps = tmpl.get("deps", [])
-            valid_deps: List[str] = []
-            for dep in raw_deps:
-                if dep in valid_id_set and dep != task_id:
-                    valid_deps.append(dep)
+            after_roles = tmpl.get("after", [])
+            deps: List[str] = []
 
-            # If a dependency reference was broken by trimming/expansion and we are not step 0,
-            # fall back to depending on the immediately preceding task
-            if raw_deps and not valid_deps and idx > 0:
-                valid_deps.append(task_ids[idx - 1])
+            if label == "analyze" and "search" in role_to_ids:
+                # Rule: analyze task depends on ALL search tasks
+                deps.extend(role_to_ids["search"])
+            else:
+                for role in after_roles:
+                    preceding = [
+                        tid for tid in role_to_ids.get(role, [])
+                        if task_ids.index(tid) < idx
+                    ]
+                    if not preceding:
+                        raise OrchestrationError(
+                            f"Task '{task_id}' specifies dependency on role '{role}', but no preceding sub-task with that role exists."
+                        )
+                    deps.extend(preceding)
+
+            resolved_deps = list(dict.fromkeys([d for d in deps if d != task_id]))
 
             sub_tasks.append(
                 SubTask(
                     id=task_id,
-                    label=tmpl["label"],
+                    label=label,
                     description=desc,
-                    dependencies=valid_deps,
+                    dependencies=resolved_deps,
                     critical=tmpl["critical"],
                 )
             )

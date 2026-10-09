@@ -66,6 +66,10 @@ class TaskProfile:
     metadata: Dict[str, Any] = field(default_factory=dict)
 
 
+import re
+from dataclasses import dataclass, field
+
+
 class TaskAnalyzer:
     """Analyses a function + its call-time arguments to produce a :class:`TaskProfile`."""
 
@@ -97,6 +101,12 @@ class TaskAnalyzer:
     # ── internals ─────────────────────────────────────────────────────
 
     @staticmethod
+    def _match_keyword(kw: str, text: str) -> bool:
+        """Check if keyword matches text using word boundaries and lemma-light matching."""
+        pattern = r"\b" + re.escape(kw).replace(r"\-", r"[-\s]?") + r"(?:s|ed|ing|es)?\b"
+        return bool(re.search(pattern, text, re.IGNORECASE))
+
+    @staticmethod
     def _extract_text(
         func: Callable[..., Any],
         args: Tuple[Any, ...],
@@ -117,11 +127,11 @@ class TaskAnalyzer:
             parts.append(str(v))
         return " ".join(parts).lower()
 
-    @staticmethod
-    def _infer_domains(text: str) -> Tuple[str, List[str]]:
+    @classmethod
+    def _infer_domains(cls, text: str) -> Tuple[str, List[str]]:
         scores: Dict[str, float] = {}
         for domain, keywords in _DOMAIN_KEYWORDS.items():
-            score = sum(1.0 for kw in keywords if kw in text)
+            score = sum(1.0 for kw in keywords if cls._match_keyword(kw, text))
             if score > 0:
                 scores[domain] = score
         if not scores:
@@ -129,11 +139,11 @@ class TaskAnalyzer:
         ranked = sorted(scores, key=scores.get, reverse=True)  # type: ignore[arg-type]
         return ranked[0], ranked[1:]
 
-    @staticmethod
-    def _estimate_complexity(text: str) -> float:
+    @classmethod
+    def _estimate_complexity(cls, text: str) -> float:
         base = 0.3
         for signal, weight in _COMPLEXITY_SIGNALS.items():
-            if signal in text:
+            if cls._match_keyword(signal, text):
                 base += weight
         # longer text → slightly higher complexity
         word_count = len(text.split())

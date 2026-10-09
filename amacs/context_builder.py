@@ -12,15 +12,35 @@ from typing import Any, Dict, Optional
 logger = logging.getLogger("amacs.context_builder")
 
 
+import logging
+from typing import Callable, Sequence
+
+logger = logging.getLogger("amacs.context_builder")
+
+
+def _get_default_token_counter() -> Callable[[str], int]:
+    try:
+        import tiktoken
+        enc = tiktoken.get_encoding("cl100k_base")
+        return lambda text: len(enc.encode(text))
+    except ImportError:
+        return lambda text: (len(text) + 3) // 4
+
+
 class ContextBuilder:
     """Formats and truncates prior context to fit within token budgets."""
 
-    DEFAULT_MAX_TOKENS = 2000  # ~8000 characters limit for prior context
+    DEFAULT_MAX_TOKENS = 2000
 
-    def __init__(self, max_tokens: Optional[int] = None) -> None:
+    def __init__(
+        self,
+        max_tokens: Optional[int] = None,
+        token_counter: Optional[Callable[[str], int]] = None,
+    ) -> None:
         self.max_tokens = max_tokens or self.DEFAULT_MAX_TOKENS
-        # Estimate ~4 characters per token
-        self.max_chars = self.max_tokens * 4
+        self.token_counter = token_counter or _get_default_token_counter()
+        self.was_truncated: bool = False
+        self.truncation_record: Optional[Dict[str, Any]] = None
 
     @staticmethod
     def estimate_tokens(text: str) -> int:
@@ -31,44 +51,58 @@ class ContextBuilder:
         self,
         context: Dict[str, Any],
         exclude_key: Optional[str] = None,
+        allowed_keys: Optional[Sequence[str]] = None,
     ) -> str:
         """Format prior context into a single prompt section.
 
-        If total context exceeds max_chars, entries are truncated proportionally.
+        Only keys in allowed_keys (or declared dependencies + original_input) are included.
+        If total context exceeds max_tokens, entries are truncated with an explicit marker.
         """
         if not context:
             return ""
 
-        filtered = {
-            k: str(v)
-            for k, v in context.items()
-            if k != exclude_key and v is not None
-        }
+        filtered: Dict[str, str] = {}
+        for k, v in context.items():
+            if k == exclude_key or v is None:
+                continue
+            if allowed_keys is not None and k not in allowed_keys:
+                continue
+            filtered[k] = str(v)
+
         if not filtered:
             return ""
 
         raw_parts = [f"--- Output of [{key}] ---\n{val}" for key, val in filtered.items()]
         full_text = "\n\n".join(raw_parts)
+        total_tokens = self.token_counter(full_text)
 
-        if len(full_text) <= self.max_chars:
+        if total_tokens <= self.max_tokens:
             return f"Prior context:\n{full_text}"
 
+        self.was_truncated = True
         logger.warning(
-            "Context size (%d chars / ~%d tokens) exceeds limit (%d chars / ~%d tokens). Truncating.",
-            len(full_text),
-            self.estimate_tokens(full_text),
-            self.max_chars,
+            "Context size (%d tokens) exceeds max_context_tokens limit (%d tokens). Truncating.",
+            total_tokens,
             self.max_tokens,
         )
 
-        # Budget per entry
-        per_entry_limit = max(200, self.max_chars // len(filtered))
+        per_entry_tokens = max(1, self.max_tokens // len(filtered))
         truncated_parts = []
         for key, val in filtered.items():
-            if len(val) > per_entry_limit:
-                head = val[: per_entry_limit // 2]
-                tail = val[-per_entry_limit // 4 :]
-                val = f"{head}\n... [truncated {len(val) - len(head) - len(tail)} chars] ...\n{tail}"
+            val_tokens = self.token_counter(val)
+            if val_tokens > per_entry_tokens:
+                ratio = per_entry_tokens / val_tokens
+                cut_len = max(100, int(len(val) * ratio))
+                head = val[: cut_len // 2]
+                tail = val[-cut_len // 4 :]
+                val = f"{head}\n[TRUNCATED: Context entry '{key}' exceeded token budget]\n{tail}"
             truncated_parts.append(f"--- Output of [{key}] ---\n{val}")
 
-        return "Prior context (truncated):\n" + "\n\n".join(truncated_parts)
+        final_text = "Prior context (truncated):\n" + "\n\n".join(truncated_parts)
+        self.truncation_record = {
+            "original_tokens": total_tokens,
+            "max_tokens": self.max_tokens,
+            "final_tokens": self.token_counter(final_text),
+            "keys_included": list(filtered.keys()),
+        }
+        return final_text

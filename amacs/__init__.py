@@ -40,7 +40,7 @@ from amacs.integrations.llm_providers import (
     get_provider,
     register_provider,
 )
-from amacs.orchestrator.agent_selector import register_agent
+from amacs.orchestrator.agent_selector import get_registered_agents, register_agent
 from amacs.results import AMACSResult
 
 __all__ = [
@@ -56,6 +56,7 @@ __all__ = [
     "SubTask",
     # Agents
     "BaseAgent",
+    "get_registered_agents",
     "register_agent",
     # LLM
     "get_provider",

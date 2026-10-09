@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, List, Optional
+from typing import Any, Dict, List, Optional
 
 from amacs.agents.base_agent import AgentResult, SubTask
 from amacs.communication import LogEntry
@@ -31,6 +31,8 @@ class AMACSResult:
     execution_plan: Optional[Any] = None
     system_snapshot: Optional[Any] = None
     adaptation_events: List[AdaptationEvent] = field(default_factory=list)
+    raw_merge: str = ""
+    validation_report: Optional[Dict[str, Any]] = None
 
     def __str__(self) -> str:
         return self.final_output

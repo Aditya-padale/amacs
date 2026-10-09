@@ -180,6 +180,8 @@ def _run_pipeline_sync(
         execution_plan=plan,
         system_snapshot=monitor.snapshot() if monitor else None,
         adaptation_events=wave_executor.adaptation_events,
+        raw_merge=aggregator.raw_merge,
+        validation_report=aggregator.validation_report,
     )
 
     if config.verbose:
@@ -274,6 +276,8 @@ async def _run_pipeline_async(
         execution_plan=plan,
         system_snapshot=monitor.snapshot() if monitor else None,
         adaptation_events=wave_executor.adaptation_events,
+        raw_merge=aggregator.raw_merge,
+        validation_report=aggregator.validation_report,
     )
 
     if config.verbose:

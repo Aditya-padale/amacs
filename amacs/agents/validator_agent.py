@@ -17,7 +17,7 @@ class ValidatorAgent(BaseAgent):
             "You are an expert fact-checker and quality reviewer. "
             "Given content and its supporting research, verify factual accuracy, "
             "check for internal contradictions, identify unsupported claims, and "
-            "ensure logical consistency. Produce a brief validation summary that "
-            "notes any issues found and confirms the overall quality. If the content "
-            "is sound, state that clearly. If issues are found, suggest specific corrections."
+            "ensure logical consistency. "
+            "Respond ONLY in valid JSON format matching this schema:\n"
+            '{"verdict": "pass" | "revise", "issues": ["issue 1", ...], "revised_text": "string or null"}'
         )

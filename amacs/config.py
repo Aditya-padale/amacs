@@ -38,8 +38,8 @@ class AMACSConfig(BaseModel):
     llm_provider: Optional[str] = Field(
         default=None,
         description=(
-            "LLM provider to use. One of 'openai', 'anthropic', 'gemini', 'ollama'. "
-            "Falls back to AMACS_LLM_PROVIDER env var, then 'openai'."
+            "LLM provider to use. One of 'openai', 'anthropic', 'gemini', 'ollama', 'stub'. "
+            "Falls back to AMACS_LLM_PROVIDER env var, then 'stub'."
         ),
     )
     llm_model: Optional[str] = Field(
@@ -57,6 +57,17 @@ class AMACSConfig(BaseModel):
     return_details: bool = Field(
         default=False,
         description="Return an AMACSResult object with full agent outputs and communication log.",
+    )
+    min_revision_ratio: float = Field(
+        default=0.6,
+        ge=0.0,
+        le=1.0,
+        description="Minimum ratio of revised text length to original text length required to accept revision.",
+    )
+    max_context_tokens: int = Field(
+        default=2000,
+        ge=100,
+        description="Max tokens allowed for prior context in agent user prompt.",
     )
     extra: Dict[str, Any] = Field(
         default_factory=dict,

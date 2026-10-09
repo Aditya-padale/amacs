@@ -7,20 +7,12 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from typing import Any, Dict, Optional
 
-from tenacity import (
-    retry,
-    retry_if_exception,
-    stop_after_attempt,
-    wait_exponential,
-)
-
 from amacs.communication import CommunicationBus
 from amacs.config import AMACSConfig
 from amacs.context_builder import ContextBuilder
 from amacs.exceptions import (
     RETRYABLE_ERRORS,
     LLMProviderError,
-    RetryExhaustedError,
     is_retryable_provider_error,
 )
 from amacs.integrations.llm_providers import LLMProvider, LLMResponse, Message, get_provider
@@ -90,13 +82,17 @@ class BaseAgent(ABC):
     def build_user_prompt(self, sub_task: SubTask, context: Dict[str, Any]) -> str:
         """Build the user-message from the sub-task and shared context.
 
-        Default implementation includes the sub-task description and any
-        prior agent outputs found in *context*.
+        Includes only declared dependencies + original_input, token-budgeted.
         """
         parts = [f"Task: {sub_task.description}"]
         if context:
-            builder = ContextBuilder()
-            ctx_str = builder.build_context_string(context, exclude_key=sub_task.id)
+            max_tokens = self._config.max_context_tokens if self._config else None
+            builder = ContextBuilder(max_tokens=max_tokens)
+            allowed = set(sub_task.dependencies)
+            allowed.add("original_input")
+            ctx_str = builder.build_context_string(
+                context, exclude_key=sub_task.id, allowed_keys=list(allowed)
+            )
             if ctx_str:
                 parts.append(ctx_str)
         return "\n\n".join(parts)
@@ -235,39 +231,19 @@ class BaseAgent(ABC):
     def _run_with_retry(
         self, sub_task: SubTask, context: Dict[str, Any], max_attempts: int
     ) -> AgentResult:
-        @retry(
-            retry=retry_if_exception(_should_retry_exception),
-            stop=stop_after_attempt(max(max_attempts, 1)),
-            wait=wait_exponential(multiplier=0.5, min=0.5, max=10),
-            reraise=True,
+        from amacs.exceptions import run_with_retry
+        return run_with_retry(
+            lambda: self._call_llm(sub_task, context),
+            max_attempts=max_attempts,
         )
-        def _inner() -> AgentResult:
-            return self._call_llm(sub_task, context)
-
-        try:
-            return _inner()
-        except Exception as exc:
-            if not _should_retry_exception(exc):
-                raise
-            raise RetryExhaustedError(
-                f"Agent '{self.agent_type}' exhausted {max_attempts} retries: {exc}"
-            ) from exc
 
     async def _arun_with_retry(
         self, sub_task: SubTask, context: Dict[str, Any], max_attempts: int
     ) -> AgentResult:
-        last_exc: Optional[Exception] = None
-        for attempt in range(max(max_attempts, 1)):
-            try:
-                return await self._acall_llm(sub_task, context)
-            except Exception as exc:
-                last_exc = exc
-                if not _should_retry_exception(exc):
-                    raise
-                import asyncio
-                await asyncio.sleep(min(0.5 * (2**attempt), 10))
-        raise RetryExhaustedError(
-            f"Agent '{self.agent_type}' exhausted {max_attempts} async retries: {last_exc}"
+        from amacs.exceptions import arun_with_retry
+        return await arun_with_retry(
+            lambda: self._acall_llm(sub_task, context),
+            max_attempts=max_attempts,
         )
 
     def __repr__(self) -> str:

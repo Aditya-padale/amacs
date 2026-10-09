@@ -64,6 +64,16 @@ class TestTaskAnalyzer:
         assert "topic='AI'" in profile.arg_summary
         assert "depth=5" in profile.arg_summary
 
+    def test_substring_matching_prevention(self) -> None:
+        def contest_results(database: str, smallest_item: str) -> str:
+            """Process contest results from database for smallest entry."""
+            return database
+
+        profile = self.analyzer.analyze(contest_results, ("db", "item"), {})
+        # "contest" should not trigger coding ("test"), "database" should not trigger analysis ("data"), "smallest" should not trigger complexity ("all")
+        assert profile.domain == "general"
+        assert profile.complexity < 0.5
+
 
 class TestTaskDecomposer:
     def setup_method(self) -> None:
