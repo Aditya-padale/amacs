@@ -7,8 +7,9 @@ Or via the CLI:
     amacs run examples/basic_usage.py
 """
 
-from amacs import amacs
+from __future__ import annotations
 
+from amacs import amacs
 
 # ── Simple sync example ──────────────────────────────────────────────────
 
