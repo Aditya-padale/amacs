@@ -14,10 +14,12 @@ from typing import Any, Dict, Optional
 
 # Default model IDs looked up from official provider documentation as of 2026-10-09.
 # OpenAI: https://platform.openai.com/docs/models
+# Groq: https://console.groq.com/docs/models
 # Anthropic: https://docs.anthropic.com/en/docs/about-claude/models
 # Gemini: https://ai.google.dev/gemini-api/docs/models/gemini
 DEFAULT_MODELS: Dict[str, str] = {
     "openai": os.getenv("AMACS_DEFAULT_OPENAI_MODEL", "gpt-4o"),
+    "groq": os.getenv("AMACS_DEFAULT_GROQ_MODEL", "llama-3.3-70b-versatile"),
     "anthropic": os.getenv("AMACS_DEFAULT_ANTHROPIC_MODEL", "claude-sonnet-4-20250514"),
     "gemini": os.getenv("AMACS_DEFAULT_GEMINI_MODEL", "gemini-2.5-flash"),
     "ollama": os.getenv("AMACS_DEFAULT_OLLAMA_MODEL", "llama3"),
@@ -44,6 +46,7 @@ class StrategyRules:
 _MODEL_MAPS: Dict[str, Dict[str, str]] = {
     "performance": {
         "openai": "gpt-4o",
+        "groq": "llama-3.3-70b-versatile",
         "anthropic": "claude-sonnet-4-20250514",
         "gemini": "gemini-2.5-flash",
         "ollama": "llama3",
@@ -51,6 +54,7 @@ _MODEL_MAPS: Dict[str, Dict[str, str]] = {
     },
     "cost": {
         "openai": "gpt-4o-mini",
+        "groq": "llama-3.1-8b-instant",
         "anthropic": "claude-3-5-haiku-20241022",
         "gemini": "gemini-2.5-flash-8b",
         "ollama": "llama3:8b",
@@ -58,6 +62,7 @@ _MODEL_MAPS: Dict[str, Dict[str, str]] = {
     },
     "speed": {
         "openai": "gpt-4o-mini",
+        "groq": "llama-3.1-8b-instant",
         "anthropic": "claude-3-5-haiku-20241022",
         "gemini": "gemini-2.5-flash-8b",
         "ollama": "llama3:8b",

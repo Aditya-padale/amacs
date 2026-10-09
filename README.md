@@ -16,7 +16,7 @@ Implemented and tested locally:
 - Synchronous and asynchronous `@amacs` wrappers backed by the shared `Pipeline`.
 - Rule-based task analysis, template decomposition, DAG validation, and wave scheduling.
 - Sync thread-pool and async wave execution with `max_agents` limits.
-- OpenAI, Anthropic, Gemini, Ollama, and deterministic stub provider adapters, loaded lazily.
+- OpenAI, Groq, Anthropic, Gemini, Ollama, and deterministic stub provider adapters, loaded lazily.
 - Retry handling for retryable provider errors, per-agent timeout enforcement, token/cost budgets, and model pricing tables.
 - Thread-safe communication bus, dependency-filtered context, tracing, optional response caching, and structured result details.
 - Optional adaptive monitoring between waves and during a wave. It can record quality, failure, latency, and budget signals, retry with another agent, swap agents, skip optional work, or reduce the remaining team.
@@ -38,6 +38,7 @@ The project is not claiming a PyPI release. Install the checkout instead:
 python -m pip install .
 python -m pip install ".[dev]"       # tests and verification tools
 python -m pip install ".[openai]"    # optional provider SDK
+python -m pip install ".[groq]"       # optional Groq provider SDK
 ```
 
 Core runtime dependencies are `pydantic` and `tenacity`. Provider SDKs,
@@ -104,11 +105,18 @@ AMACS uses the deterministic `stub` provider so the default tests need no
 network and no API key. The default `WebSearchTool` uses `MockSearchBackend` and
 labels its output as mock data. Applications can supply a real `SearchBackend`.
 
-Supported provider names are `stub`, `openai`, `anthropic`, `gemini`, and
+Supported provider names are `stub`, `openai`, `groq`, `anthropic`, `gemini`, and
 `ollama`. Provider model defaults are defined in the provider module and can be
 overridden with `llm_model` or per-agent `models={...}`. Verify provider model
 availability with the provider's current official documentation before making
 live calls; this project does not assert that every default remains current.
+
+For Groq, set `GROQ_API_KEY` and select the provider:
+
+```bash
+export GROQ_API_KEY="your-key"
+export AMACS_LLM_PROVIDER=groq
+```
 
 Provider responses expose normalized content, usage, structured JSON, and tool
 calls (`{id, name, arguments}`). Pass `output_schema` with a Pydantic model for

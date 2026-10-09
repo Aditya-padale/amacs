@@ -1,4 +1,4 @@
-"""LLM provider abstraction — uniform interface for OpenAI, Anthropic, Gemini, and Ollama.
+"""LLM provider abstraction — uniform interface for OpenAI, Anthropic, Gemini, Groq, and Ollama.
 
 The framework never imports an SDK directly; it goes through :class:`LLMProvider`.
 Concrete providers are loaded lazily so missing optional deps don't crash the import.
@@ -210,6 +210,100 @@ class OpenAIProvider(LLMProvider):
             return _response(_value(message, "content", ""), _value(resp, "model", model_name), _usage(resp), resp, _value(message, "tool_calls"))
         except Exception as exc:
             raise LLMProviderError(f"OpenAI async call failed: {exc}") from exc
+
+
+# ── Groq ─────────────────────────────────────────────────────────────────
+
+class GroqProvider(LLMProvider):
+    """Provider backed by the ``groq`` SDK."""
+
+    DEFAULT_MODEL = "llama-3.3-70b-versatile"
+
+    def __init__(self, api_key: Optional[str] = None, **client_kwargs: Any) -> None:
+        try:
+            from groq import AsyncGroq, Groq
+        except ImportError:
+            raise LLMProviderError(
+                "groq package not installed. Run: pip install amacs[groq]"
+            ) from None
+        self._api_key = api_key or os.getenv("GROQ_API_KEY", "")
+        self._client = Groq(api_key=self._api_key, **client_kwargs)
+        self._async_client = AsyncGroq(api_key=self._api_key, **client_kwargs)
+
+    def name(self) -> str:
+        return "groq"
+
+    @staticmethod
+    def _parameters(
+        messages: Sequence[Message],
+        model: str,
+        temperature: float,
+        max_tokens: int,
+        timeout: Optional[float],
+        kwargs: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        params: Dict[str, Any] = {
+            "model": model,
+            "messages": [{"role": m.role, "content": m.content} for m in messages],
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+        }
+        if timeout is not None:
+            params["timeout"] = timeout
+        params.update(_schema_parameters(kwargs, "groq"))
+        return params
+
+    def chat(
+        self,
+        messages: Sequence[Message],
+        *,
+        model: Optional[str] = None,
+        temperature: float = 0.7,
+        max_tokens: int = 2048,
+        timeout: Optional[float] = None,
+        **kwargs: Any,
+    ) -> LLMResponse:
+        model_name = model or self.DEFAULT_MODEL
+        try:
+            resp: Any = self._client.chat.completions.create(
+                **self._parameters(messages, model_name, temperature, max_tokens, timeout, kwargs)
+            )
+            message = resp.choices[0].message
+            return _response(
+                _value(message, "content", ""),
+                _value(resp, "model", model_name),
+                _usage(resp),
+                resp,
+                _value(message, "tool_calls"),
+            )
+        except Exception as exc:
+            raise LLMProviderError(f"Groq call failed: {exc}") from exc
+
+    async def achat(
+        self,
+        messages: Sequence[Message],
+        *,
+        model: Optional[str] = None,
+        temperature: float = 0.7,
+        max_tokens: int = 2048,
+        timeout: Optional[float] = None,
+        **kwargs: Any,
+    ) -> LLMResponse:
+        model_name = model or self.DEFAULT_MODEL
+        try:
+            resp: Any = await self._async_client.chat.completions.create(
+                **self._parameters(messages, model_name, temperature, max_tokens, timeout, kwargs)
+            )
+            message = resp.choices[0].message
+            return _response(
+                _value(message, "content", ""),
+                _value(resp, "model", model_name),
+                _usage(resp),
+                resp,
+                _value(message, "tool_calls"),
+            )
+        except Exception as exc:
+            raise LLMProviderError(f"Groq async call failed: {exc}") from exc
 
 
 # ── Anthropic ─────────────────────────────────────────────────────────────
@@ -721,6 +815,7 @@ class FlakyProvider(LLMProvider):
 
 _PROVIDERS: Dict[str, Type[LLMProvider]] = {
     "openai": OpenAIProvider,
+    "groq": GroqProvider,
     "anthropic": AnthropicProvider,
     "ollama": OllamaProvider,
     "gemini": GeminiProvider,

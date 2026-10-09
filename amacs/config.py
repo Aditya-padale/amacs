@@ -39,7 +39,7 @@ class AMACSConfig(BaseModel):
     llm_provider: Optional[str] = Field(
         default=None,
         description=(
-            "LLM provider to use. One of 'openai', 'anthropic', 'gemini', 'ollama', 'stub'. "
+            "LLM provider to use. One of 'openai', 'groq', 'anthropic', 'gemini', 'ollama', 'stub'. "
             "Falls back to AMACS_LLM_PROVIDER env var, then 'stub'."
         ),
     )
