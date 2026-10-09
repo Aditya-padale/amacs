@@ -5,6 +5,7 @@ Uses Pydantic for validation so invalid configs fail fast with clear messages.
 
 from __future__ import annotations
 
+import os
 from enum import Enum
 from typing import Any, Dict, Optional, cast
 
@@ -119,6 +120,10 @@ class AMACSConfig(BaseModel):
         default_factory=dict,
         description="Arbitrary extra parameters forwarded to agents and hooks.",
     )
+    on_event: Optional[Any] = Field(
+        default=None,
+        description="Optional callback receiving execution events.",
+    )
 
     model_config = {"frozen": True}
 
@@ -142,6 +147,12 @@ def build_config(**kwargs: Any) -> AMACSConfig:
     Raises :class:`ConfigurationError` on validation failure.
     """
     try:
+        if "llm_provider" not in kwargs and os.getenv("AMACS_LLM_PROVIDER"):
+            kwargs["llm_provider"] = os.environ["AMACS_LLM_PROVIDER"]
+        if "llm_model" not in kwargs and os.getenv("AMACS_LLM_MODEL"):
+            kwargs["llm_model"] = os.environ["AMACS_LLM_MODEL"]
+        if "strategy" not in kwargs and os.getenv("AMACS_STRATEGY"):
+            kwargs["strategy"] = os.environ["AMACS_STRATEGY"]
         return AMACSConfig(**kwargs)
     except Exception as exc:
         raise ConfigurationError(f"Invalid AMACS configuration: {exc}") from exc

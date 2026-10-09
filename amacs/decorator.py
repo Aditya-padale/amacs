@@ -14,7 +14,7 @@ from __future__ import annotations
 import asyncio
 import functools
 import logging
-from typing import Any, Callable, TypeVar, cast
+from typing import Any, Callable, Protocol, cast
 
 from amacs.config import build_config
 from amacs.pipeline import Pipeline
@@ -22,14 +22,18 @@ from amacs.results import AMACSResult
 
 logger = logging.getLogger("amacs.decorator")
 
-F = TypeVar("F", bound=Callable[..., Any])
+
+class AMACSCallable(Protocol):
+    """Protocol for functions wrapped by @amacs decorator."""
+    last_result: AMACSResult | None
+    def __call__(self, *args: Any, **kw: Any) -> Any: ...
 
 
-def amacs(**kwargs: Any) -> Callable[[F], F]:
+def amacs(**kwargs: Any) -> Callable[[Callable[..., Any]], AMACSCallable]:
     """Decorator factory that wraps a function with multi-agent orchestration."""
     config = build_config(**kwargs)
 
-    def decorator(func: F) -> F:
+    def decorator(func: Callable[..., Any]) -> AMACSCallable:
         pipeline = Pipeline(config)
         if asyncio.iscoroutinefunction(func):
             @functools.wraps(func)
@@ -39,7 +43,7 @@ def amacs(**kwargs: Any) -> Callable[[F], F]:
                 return res if config.return_details else res.final_output
 
             async_wrapper.last_result = None  # type: ignore[attr-defined]
-            return cast(F, async_wrapper)
+            return cast(AMACSCallable, async_wrapper)
         else:
             @functools.wraps(func)
             def sync_wrapper(*args: Any, **kw: Any) -> Any:
@@ -48,7 +52,8 @@ def amacs(**kwargs: Any) -> Callable[[F], F]:
                 return res if config.return_details else res.final_output
 
             sync_wrapper.last_result = None  # type: ignore[attr-defined]
-            return cast(F, sync_wrapper)
+            return cast(AMACSCallable, sync_wrapper)
 
     return decorator
+
 

@@ -9,19 +9,20 @@ from __future__ import annotations
 import asyncio
 import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from amacs.adaptive.adaptation_engine import ActionType, AdaptationEngine
 from amacs.adaptive.evaluator import Evaluator
 from amacs.adaptive.monitor import Monitor
 from amacs.adaptive.reconfigurator import Reconfigurator
-from amacs.agents.base_agent import AgentResult, BaseAgent
+from amacs.agents.base_agent import AgentResult, BaseAgent, SubTask
 from amacs.communication import CommunicationBus
 from amacs.config import AMACSConfig
 from amacs.exceptions import OrchestrationError
 from amacs.orchestrator.scheduler import ExecutionPlan
 from amacs.pricing import calculate_cost
 from amacs.results import AdaptationEvent
+from amacs.tracing import Tracer
 
 logger = logging.getLogger("amacs.executor")
 
@@ -36,16 +37,37 @@ class WaveExecutor:
         evaluator: Optional[Evaluator] = None,
         engine: Optional[AdaptationEngine] = None,
         reconfigurator: Optional[Reconfigurator] = None,
+        tracer: Optional[Tracer] = None,
+        on_event: Optional[Callable[[Dict[str, object]], None]] = None,
     ) -> None:
         self._config = config
         self._monitor = monitor
         self._evaluator = evaluator
         self._engine = engine
         self._reconfigurator = reconfigurator
+        self._tracer = tracer or Tracer()
+        self._on_event = on_event
         self.adaptation_events: List[AdaptationEvent] = []
         self.accumulated_tokens: int = 0
         self.accumulated_cost_usd: float = 0.0
         self._budget_degraded: bool = False
+        self.cost_by_agent: Dict[str, Dict[str, float]] = {}
+        self.cost_by_stage: Dict[str, Dict[str, float]] = {}
+
+    def _emit(self, event: str, **data: object) -> None:
+        if self._on_event:
+            self._on_event({"event": event, **data})
+
+    def _run_agent(self, agent: BaseAgent, st: SubTask, context: Dict[str, Any], bus: CommunicationBus) -> AgentResult:
+        task_id = st.id
+        span = self._tracer.start_span(task_id, "task", {"stage": st.label})
+        try:
+            result = agent.run(st, context, bus)
+            self._tracer.end_span(span, {"success": result.success})
+            return result
+        except Exception as exc:
+            self._tracer.end_span(span, {"success": False, "error": str(exc)})
+            raise
 
     def execute_sync(
         self,
@@ -63,6 +85,7 @@ class WaveExecutor:
         while wave_idx < len(plan.waves):
             wave = plan.waves[wave_idx]
             wave_results: List[AgentResult] = []
+            wave_span = self._tracer.start_span(f"wave_{wave_idx}", "wave", {"wave": wave_idx})
 
             if wave:
                 with ThreadPoolExecutor(max_workers=max_workers) as pool:
@@ -71,7 +94,7 @@ class WaveExecutor:
                         agent = agents.get(st.id)
                         if agent is None:
                             continue
-                        future = pool.submit(agent.run, st, context, bus)
+                        future = pool.submit(self._run_agent, agent, st, context, bus)
                         futures[future] = st
 
                     for future in as_completed(futures):
@@ -196,6 +219,7 @@ class WaveExecutor:
 
                 all_results.extend(wave_results)
                 context = bus.snapshot()
+            self._tracer.end_span(wave_span, {"result_count": len(wave_results)})
 
             self._adapt_between_waves(wave_idx, len(plan.waves), agents, plan)
             wave_idx += 1
@@ -216,13 +240,14 @@ class WaveExecutor:
         wave_idx = 0
         while wave_idx < len(plan.waves):
             wave = plan.waves[wave_idx]
+            wave_span = self._tracer.start_span(f"wave_{wave_idx}", "wave", {"wave": wave_idx})
             if wave:
                 tasks = []
                 for st in wave:
                     agent = agents.get(st.id)
                     if agent is None:
                         continue
-                    tasks.append(agent.arun(st, context, bus))
+                    tasks.append(self._run_async_agent(agent, st, context, bus))
 
                 raw_results = await asyncio.gather(*tasks, return_exceptions=True)
                 wave_results: List[AgentResult] = []
@@ -345,6 +370,7 @@ class WaveExecutor:
 
                 all_results.extend(wave_results)
                 context = bus.snapshot()
+            self._tracer.end_span(wave_span, {"result_count": len(wave_results)})
 
             self._adapt_between_waves(wave_idx, len(plan.waves), agents, plan)
             wave_idx += 1
@@ -358,6 +384,13 @@ class WaveExecutor:
     ) -> None:
         if on_result:
             on_result(res)
+        self._emit(
+            "agent_result",
+            task=res.sub_task_id,
+            agent=res.agent_name,
+            success=res.success,
+            tokens=res.token_usage.get("total_tokens", 0),
+        )
 
         tokens = res.token_usage.get("total_tokens", 0)
         prompt_tok = res.token_usage.get("prompt_tokens", 0)
@@ -372,6 +405,13 @@ class WaveExecutor:
         cost = calculate_cost(model_name, prompt_tok, comp_tok, price_overrides)
         self.accumulated_tokens += tokens
         self.accumulated_cost_usd += cost
+        stage = res.sub_task_id.rsplit("_", 1)[0] if "_" in res.sub_task_id else res.sub_task_id
+        for bucket, key in ((self.cost_by_agent, res.agent_name), (self.cost_by_stage, stage)):
+            entry = bucket.setdefault(key, {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0, "usd": 0.0})
+            entry["prompt_tokens"] += prompt_tok
+            entry["completion_tokens"] += comp_tok
+            entry["total_tokens"] += tokens
+            entry["usd"] += cost
 
         if self._config.max_total_tokens and self.accumulated_tokens > self._config.max_total_tokens:
             from amacs.exceptions import BudgetExceededError
@@ -409,6 +449,19 @@ class WaveExecutor:
                     res.error or "unknown",
                     content=res.content,
                 )
+
+    async def _run_async_agent(
+        self, agent: BaseAgent, st: SubTask, context: Dict[str, Any], bus: CommunicationBus
+    ) -> AgentResult:
+        task_id = st.id
+        span = self._tracer.start_span(task_id, "task", {"stage": st.label})
+        try:
+            result = await agent.arun(st, context, bus)
+            self._tracer.end_span(span, {"success": result.success})
+            return result
+        except Exception as exc:
+            self._tracer.end_span(span, {"success": False, "error": str(exc)})
+            raise
 
     def _check_and_degrade_budget(
         self,

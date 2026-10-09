@@ -10,7 +10,7 @@ test:
 	python -m pytest tests/ -v --tb=short
 
 test-cov:
-	python -m pytest tests/ -v --cov=amacs --cov-report=term-missing --cov-fail-under=80
+	python -m pytest tests/ -v --cov=amacs --cov-report=term-missing --cov-fail-under=86
 
 verify: lint typecheck test-cov
 	rm -rf dist/ build/ *.egg-info .venv_verify

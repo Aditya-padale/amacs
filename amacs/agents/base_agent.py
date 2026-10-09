@@ -18,6 +18,7 @@ from amacs.exceptions import (
 )
 from amacs.integrations.llm_providers import LLMProvider, LLMResponse, Message, get_provider
 from amacs.integrations.monitoring import MetricsRecorder
+from amacs.tracing import Tracer
 
 logger = logging.getLogger("amacs.agents.base_agent")
 
@@ -70,6 +71,11 @@ class BaseAgent(ABC):
         self._provider = provider or get_provider()
         self._config = config
         self._metrics = MetricsRecorder()
+        self._tracer: Optional[Tracer] = None
+
+    def attach_tracer(self, tracer: Tracer) -> None:
+        """Attach the execution tracer owned by the current pipeline run."""
+        self._tracer = tracer
 
     # ── Subclass hooks ────────────────────────────────────────────────
 
@@ -236,21 +242,34 @@ class BaseAgent(ABC):
                 )
 
         def _do_call(msgs: list[Message], temp: float = 0.7) -> LLMResponse:
-            if timeout is not None and timeout > 0:
-                import concurrent.futures
+            span = self._tracer.start_span(
+                f"{self.agent_type}:{sub_task.id}:llm",
+                "llm_call",
+                {"agent": self.agent_type, "task": sub_task.id, "model": model},
+            ) if self._tracer else None
+            try:
+                if timeout is not None and timeout > 0:
+                    import concurrent.futures
 
-                from amacs.exceptions import AgentTimeoutError
+                    from amacs.exceptions import AgentTimeoutError
 
-                with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
-                    fut = executor.submit(self._provider.chat, msgs, model=model, temperature=temp, timeout=timeout)
-                    try:
-                        return fut.result(timeout=timeout)
-                    except concurrent.futures.TimeoutError:
-                        raise AgentTimeoutError(
-                            f"Agent '{self.agent_type}' for sub-task '{sub_task.id}' timed out after {timeout}s"
-                        ) from None
-            else:
-                return self._provider.chat(msgs, model=model, temperature=temp, timeout=timeout)
+                    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+                        fut = executor.submit(self._provider.chat, msgs, model=model, temperature=temp, timeout=timeout)
+                        try:
+                            response = fut.result(timeout=timeout)
+                        except concurrent.futures.TimeoutError:
+                            raise AgentTimeoutError(
+                                f"Agent '{self.agent_type}' for sub-task '{sub_task.id}' timed out after {timeout}s"
+                            ) from None
+                else:
+                    response = self._provider.chat(msgs, model=model, temperature=temp, timeout=timeout)
+            except Exception as exc:
+                if span and self._tracer:
+                    self._tracer.end_span(span, {"success": False, "error": str(exc)})
+                raise
+            if span and self._tracer:
+                self._tracer.end_span(span, {"success": True, "total_tokens": response.usage.get("total_tokens", 0)})
+            return response
 
         resp = _do_call(messages)
         if cache_inst:
@@ -396,22 +415,35 @@ class BaseAgent(ABC):
                 )
 
         async def _do_acall(msgs: list[Message], temp: float = 0.7) -> LLMResponse:
-            if timeout is not None and timeout > 0:
-                import asyncio
+            span = self._tracer.start_span(
+                f"{self.agent_type}:{sub_task.id}:llm",
+                "llm_call",
+                {"agent": self.agent_type, "task": sub_task.id, "model": model},
+            ) if self._tracer else None
+            try:
+                if timeout is not None and timeout > 0:
+                    import asyncio
 
-                from amacs.exceptions import AgentTimeoutError
+                    from amacs.exceptions import AgentTimeoutError
 
-                try:
-                    return await asyncio.wait_for(
-                        self._provider.achat(msgs, model=model, temperature=temp, timeout=timeout),
-                        timeout=timeout,
-                    )
-                except asyncio.TimeoutError:
-                    raise AgentTimeoutError(
-                        f"Agent '{self.agent_type}' for sub-task '{sub_task.id}' timed out after {timeout}s"
-                    ) from None
-            else:
-                return await self._provider.achat(msgs, model=model, temperature=temp, timeout=timeout)
+                    try:
+                        response = await asyncio.wait_for(
+                            self._provider.achat(msgs, model=model, temperature=temp, timeout=timeout),
+                            timeout=timeout,
+                        )
+                    except asyncio.TimeoutError:
+                        raise AgentTimeoutError(
+                            f"Agent '{self.agent_type}' for sub-task '{sub_task.id}' timed out after {timeout}s"
+                        ) from None
+                else:
+                    response = await self._provider.achat(msgs, model=model, temperature=temp, timeout=timeout)
+            except Exception as exc:
+                if span and self._tracer:
+                    self._tracer.end_span(span, {"success": False, "error": str(exc)})
+                raise
+            if span and self._tracer:
+                self._tracer.end_span(span, {"success": True, "total_tokens": response.usage.get("total_tokens", 0)})
+            return response
 
         resp = await _do_acall(messages)
         if cache_inst:

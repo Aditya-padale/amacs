@@ -22,6 +22,7 @@ from amacs.orchestrator.scheduler import ExecutionPlan, Scheduler
 from amacs.orchestrator.task_analyzer import TaskAnalyzer
 from amacs.orchestrator.task_decomposer import TaskDecomposer
 from amacs.results import AMACSResult
+from amacs.tracing import Tracer
 
 logger = logging.getLogger("amacs.pipeline")
 
@@ -36,6 +37,7 @@ class Pipeline:
     ) -> None:
         self.config = config
         self.provider = provider or get_provider(config.llm_provider)
+        self._tracer: Optional[Tracer] = None
 
     def _prepare(
         self,
@@ -68,6 +70,10 @@ class Pipeline:
         # 3. Select agents
         selector = AgentSelector(provider=self.provider, config=self.config)
         agents = selector.select(sub_tasks)
+        tracer = Tracer(on_event=self.config.on_event)
+        self._tracer = tracer
+        for agent in agents.values():
+            agent.attach_tracer(tracer)
         logger.info("Agents assigned: %s", {k: v.agent_type for k, v in agents.items()})
 
         # 4. Schedule
@@ -90,6 +96,8 @@ class Pipeline:
             evaluator=evaluator,
             engine=engine,
             reconfigurator=reconfigurator,
+            tracer=tracer,
+            on_event=self.config.on_event,
         )
 
         def on_result(result: AgentResult) -> None:
@@ -166,6 +174,13 @@ class Pipeline:
             adaptation_events=wave_executor.adaptation_events,
             raw_merge=aggregator.raw_merge,
             validation_report=aggregator.validation_report,
+            trace=self._tracer or Tracer(),
+            cost_report={
+                "total_tokens": wave_executor.accumulated_tokens,
+                "total_usd": wave_executor.accumulated_cost_usd,
+                "by_agent": wave_executor.cost_by_agent,
+                "by_stage": wave_executor.cost_by_stage,
+            },
         )
 
         if self.config.verbose:

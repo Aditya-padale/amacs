@@ -36,8 +36,6 @@ def _eval_ast_node(node: ast.AST) -> Any:
         if isinstance(node.value, (int, float, complex)):
             return node.value
         raise ValueError(f"Constant of type '{type(node.value).__name__}' is not allowed")
-    elif hasattr(ast, "Num") and isinstance(node, ast.Num):
-        return node.n
     elif isinstance(node, ast.Name):
         if node.id in ALLOWED_CONSTANTS:
             return ALLOWED_CONSTANTS[node.id]
@@ -76,7 +74,7 @@ def _eval_ast_node(node: ast.AST) -> Any:
         args = [_eval_ast_node(arg) for arg in node.args]
         return ALLOWED_FUNCS[func_name](*args)
     else:
-        raise ValueError(f"AST node '{type(node).__name__}' is forbidden")
+        raise TypeError(f"AST node '{type(node).__name__}' is forbidden")
 
 
 class PythonCalcTool(Tool):

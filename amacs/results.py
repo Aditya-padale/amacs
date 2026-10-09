@@ -7,6 +7,7 @@ from typing import Any, Dict, List, Optional
 
 from amacs.agents.base_agent import AgentResult, SubTask
 from amacs.communication import LogEntry
+from amacs.tracing import Tracer
 
 
 @dataclass
@@ -48,6 +49,8 @@ class AMACSResult:
     adaptation_events: List[AdaptationEvent] = field(default_factory=list)
     raw_merge: str = ""
     validation_report: Optional[Dict[str, Any]] = None
+    trace: Tracer = field(default_factory=Tracer)
+    cost_report: Dict[str, Any] = field(default_factory=dict)
 
     def __str__(self) -> str:
         return self.final_output

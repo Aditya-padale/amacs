@@ -1,3 +1,10 @@
+# Changelog
+
+## Unreleased
+
+- Wired execution tracing, structured trace rendering, event hooks, and per-agent/stage cost reports into pipeline results.
+- Added `amacs trace` and `amacs bench`; `amacs run` now accepts provider, model, and strategy overrides.
+
 # AMACS Changelog
 
 ## [Unreleased] - Session 3 (2026-10-09)

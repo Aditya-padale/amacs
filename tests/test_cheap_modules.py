@@ -75,6 +75,22 @@ def test_tracer_spans_and_summary() -> None:
     assert summary["spans"][0]["type"] == "wave_execution"
 
 
+def test_tracer_serialization_and_events() -> None:
+    events = []
+    tracer = Tracer(on_event=events.append)
+    root = tracer.start_span("pipeline", "stage")
+    child = tracer.start_span("task_0", "task", parent=root)
+    tracer.end_span(child, {"success": True})
+    tracer.end_span(root)
+
+    trace_json = tracer.to_json()
+    assert '"parent": "pipeline"' in trace_json
+    assert "task_0 (task)" in tracer.to_mermaid()
+    assert [event["event"] for event in events] == [
+        "span_started", "span_started", "span_finished", "span_finished"
+    ]
+
+
 # ── Shim Tests ───────────────────────────────────────────────────────────────
 
 def test_reexport_shims() -> None:
