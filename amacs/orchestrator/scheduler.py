@@ -7,6 +7,7 @@ sync (``ThreadPoolExecutor``) and async (``asyncio.gather``) execution paths.
 from __future__ import annotations
 
 import asyncio
+import math
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any, Callable, Dict, List, Optional, Set
@@ -33,6 +34,11 @@ class Scheduler:
     def __init__(self, config: Optional[AMACSConfig] = None) -> None:
         self._config = config
         self._max_agents = config.max_agents if config else 4
+        if config:
+            from amacs.strategy import StrategyPolicy
+
+            rules = StrategyPolicy.get_rules(config.strategy.value)
+            self._max_agents = max(1, math.ceil(self._max_agents * rules.max_concurrency_multiplier))
 
     # ── Planning ──────────────────────────────────────────────────────
 
@@ -148,19 +154,21 @@ class Scheduler:
         context = bus.snapshot()
 
         for wave in plan.waves:
-            tasks = []
+            task_entries = []
             for st in wave:
                 agent = agents.get(st.id)
                 if agent is None:
                     continue
-                tasks.append(self._run_agent_async(agent, st, context, bus))
+                task_entries.append((st, self._run_agent_async(agent, st, context, bus)))
 
-            wave_results = await asyncio.gather(*tasks, return_exceptions=True)
+            wave_results = await asyncio.gather(
+                *(task for _, task in task_entries), return_exceptions=True
+            )
 
             processed: List[AgentResult] = []
             for i, result in enumerate(wave_results):
+                st = task_entries[i][0]
                 if isinstance(result, Exception):
-                    st = wave[i]
                     result = AgentResult(
                         sub_task_id=st.id,
                         agent_name="unknown",

@@ -6,6 +6,8 @@ Concrete providers are loaded lazily so missing optional deps don't crash the im
 
 from __future__ import annotations
 
+import asyncio
+import concurrent.futures
 import json
 import os
 from abc import ABC, abstractmethod
@@ -442,12 +444,23 @@ class OllamaProvider(LLMProvider):
     ) -> LLMResponse:
         model_name = model or self.DEFAULT_MODEL
         try:
-            resp = self._client.chat(
-                model=model_name,
-                messages=[{"role": m.role, "content": m.content} for m in messages],
-                options={"temperature": temperature, "num_predict": max_tokens},
-                **_schema_parameters(kwargs, "ollama"),
-            )
+            def call() -> Any:
+                return self._client.chat(
+                    model=model_name,
+                    messages=[{"role": m.role, "content": m.content} for m in messages],
+                    options={"temperature": temperature, "num_predict": max_tokens},
+                    **_schema_parameters(kwargs, "ollama"),
+                )
+
+            executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+            future = executor.submit(call)
+            try:
+                resp = future.result(timeout=timeout) if timeout is not None else future.result()
+            except concurrent.futures.TimeoutError:
+                executor.shutdown(wait=False, cancel_futures=True)
+                raise TimeoutError(f"Ollama call timed out after {timeout}s") from None
+            else:
+                executor.shutdown(wait=True)
             usage = {"prompt_tokens": resp.get("prompt_eval_count", 0), "completion_tokens": resp.get("eval_count", 0), "total_tokens": resp.get("prompt_eval_count", 0) + resp.get("eval_count", 0)}
             message = resp.get("message", {})
             return _response(message.get("content", ""), model_name, usage, resp, message.get("tool_calls"))
@@ -466,12 +479,12 @@ class OllamaProvider(LLMProvider):
     ) -> LLMResponse:
         model_name = model or self.DEFAULT_MODEL
         try:
-            resp = await self._async_client.chat(
+            resp = await asyncio.wait_for(self._async_client.chat(
                 model=model_name,
                 messages=[{"role": m.role, "content": m.content} for m in messages],
                 options={"temperature": temperature, "num_predict": max_tokens},
                 **_schema_parameters(kwargs, "ollama"),
-            )
+            ), timeout=timeout)
             usage = {"prompt_tokens": resp.get("prompt_eval_count", 0), "completion_tokens": resp.get("eval_count", 0), "total_tokens": resp.get("prompt_eval_count", 0) + resp.get("eval_count", 0)}
             message = resp.get("message", {})
             return _response(message.get("content", ""), model_name, usage, resp, message.get("tool_calls"))
@@ -531,11 +544,20 @@ class GeminiProvider(LLMProvider):
                 system_instruction=system_instruction,
                 **_schema_parameters(kwargs, "gemini"),
             )
-            resp = self._client.models.generate_content(
+            executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+            future = executor.submit(
+                self._client.models.generate_content,
                 model=model_name,
                 contents=contents,
                 config=config,
             )
+            try:
+                resp = future.result(timeout=timeout) if timeout is not None else future.result()
+            except concurrent.futures.TimeoutError:
+                executor.shutdown(wait=False, cancel_futures=True)
+                raise TimeoutError(f"Gemini call timed out after {timeout}s") from None
+            else:
+                executor.shutdown(wait=True)
             usage_meta = getattr(resp, "usage_metadata", None)
             prompt_tokens = getattr(usage_meta, "prompt_token_count", 0) or 0
             completion_tokens = getattr(usage_meta, "candidates_token_count", 0) or 0
@@ -565,11 +587,11 @@ class GeminiProvider(LLMProvider):
                 system_instruction=system_instruction,
                 **_schema_parameters(kwargs, "gemini"),
             )
-            resp = await self._client.aio.models.generate_content(
+            resp = await asyncio.wait_for(self._client.aio.models.generate_content(
                 model=model_name,
                 contents=contents,
                 config=config,
-            )
+            ), timeout=timeout)
             usage_meta = getattr(resp, "usage_metadata", None)
             prompt_tokens = getattr(usage_meta, "prompt_token_count", 0) or 0
             completion_tokens = getattr(usage_meta, "candidates_token_count", 0) or 0

@@ -20,6 +20,7 @@ from amacs.exceptions import (
 )
 from amacs.integrations.llm_providers import LLMProvider, LLMResponse, Message, get_provider
 from amacs.integrations.monitoring import MetricsRecorder
+from amacs.strategy import StrategyPolicy
 from amacs.tracing import Tracer
 
 logger = logging.getLogger("amacs.agents.base_agent")
@@ -146,7 +147,11 @@ class BaseAgent(ABC):
         bus: Optional[CommunicationBus] = None,
     ) -> AgentResult:
         """Execute the sub-task synchronously with retries."""
-        retry_limit = self._config.retry_limit if self._config else 3
+        retry_limit = (
+            min(self._config.retry_limit, StrategyPolicy.get_rules(self._config.strategy.value).retry_limit)
+            if self._config
+            else 3
+        )
         start = time.time()
         try:
             result = self._run_with_retry(sub_task, context, retry_limit, bus=bus)
@@ -184,7 +189,11 @@ class BaseAgent(ABC):
         bus: Optional[CommunicationBus] = None,
     ) -> AgentResult:
         """Execute the sub-task asynchronously with retries."""
-        retry_limit = self._config.retry_limit if self._config else 3
+        retry_limit = (
+            min(self._config.retry_limit, StrategyPolicy.get_rules(self._config.strategy.value).retry_limit)
+            if self._config
+            else 3
+        )
         start = time.time()
         try:
             result = await self._arun_with_retry(sub_task, context, retry_limit, bus=bus)

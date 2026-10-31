@@ -122,19 +122,18 @@ class TaskDecomposer:
             deps: List[str] = []
 
             if label == "analyze" and "search" in role_to_ids:
-                # Rule: analyze task depends on ALL search tasks
+                # Every analysis sees all gathered data, then follows prior analyses.
                 deps.extend(role_to_ids["search"])
-            else:
-                for role in after_roles:
-                    preceding = [
-                        tid for tid in role_to_ids.get(role, [])
-                        if task_ids.index(tid) < idx
-                    ]
-                    if not preceding:
-                        raise OrchestrationError(
-                            f"Task '{task_id}' specifies dependency on role '{role}', but no preceding sub-task with that role exists."
-                        )
-                    deps.extend(preceding)
+            for role in after_roles:
+                preceding = [
+                    tid for tid in role_to_ids.get(role, [])
+                    if task_ids.index(tid) < idx
+                ]
+                if not preceding:
+                    raise OrchestrationError(
+                        f"Task '{task_id}' specifies dependency on role '{role}', but no preceding sub-task with that role exists."
+                    )
+                deps.extend(preceding)
 
             resolved_deps = list(dict.fromkeys([d for d in deps if d != task_id]))
 

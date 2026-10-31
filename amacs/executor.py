@@ -272,18 +272,20 @@ class WaveExecutor:
                 ) -> AgentResult:
                     async with _semaphore:
                         return await self._run_async_agent(agent, task, _context, bus)
-                tasks = []
+                task_entries = []
                 for st in wave:
                     agent = agents.get(st.id)
                     if agent is None:
                         continue
-                    tasks.append(_bounded(agent, st))
+                    task_entries.append((st, _bounded(agent, st)))
 
-                raw_results = await asyncio.gather(*tasks, return_exceptions=True)
+                raw_results = await asyncio.gather(
+                    *(task for _, task in task_entries), return_exceptions=True
+                )
                 wave_results: List[AgentResult] = []
                 for i, res in enumerate(raw_results):
+                    st = task_entries[i][0]
                     if isinstance(res, Exception):
-                        st = wave[i]
                         res = AgentResult(
                             sub_task_id=st.id,
                             agent_name="unknown",

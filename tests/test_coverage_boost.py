@@ -139,6 +139,7 @@ def test_openai_provider_mocked() -> None:
 
 
 def test_anthropic_provider_mocked() -> None:
+    pytest.importorskip("anthropic")
     with patch("anthropic.Anthropic"), patch("anthropic.AsyncAnthropic"):
         provider = AnthropicProvider(api_key="mock_key")
         assert provider.name() == "anthropic"
@@ -180,6 +181,7 @@ def test_openai_async_and_fatal_error() -> None:
 
 
 def test_anthropic_async_and_fatal_error() -> None:
+    pytest.importorskip("anthropic")
     with patch("anthropic.Anthropic"), patch("anthropic.AsyncAnthropic"):
         provider = AnthropicProvider(api_key="mock_key")
         response = MagicMock(
