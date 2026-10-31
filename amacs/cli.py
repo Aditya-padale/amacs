@@ -15,10 +15,35 @@ import sys
 from pathlib import Path
 
 
+def _print_banner() -> None:
+    """Render the AMACS terminal banner."""
+    from amacs import __version__
+
+    lines = (
+        "    _    __  __    _    ____ ____",
+        "   / \\  |  \\/  |  / \\  / ___/ ___|",
+        "  / _ \\ | |\\/| | / _ \\ \\___ \\___ \\ ",
+        " / ___ \\| |  | |/ ___ \\ ___) |___) |",
+        "/_/   \\_\\_|  |_/_/   \\_\\____/|____/",
+    )
+    content = (*lines, "Adaptive Multi-Agent Coordination System", f"v{__version__}")
+    width = max(len(line) for line in content) + 2
+    output = [
+        "+" + "-" * width + "+",
+        *[f"| {line.ljust(width - 2)} |" for line in content],
+        "+" + "-" * width + "+",
+    ]
+    text = "\n".join(output)
+    if sys.stdout.isatty():
+        text = f"\033[95m{text}\033[0m"
+    print(text)
+
+
 def main(argv: list[str] | None = None) -> None:
     """Entry point for the ``amacs`` CLI."""
     from amacs import __version__
 
+    _print_banner()
     parser = argparse.ArgumentParser(
         prog="amacs",
         description="AMACS — Adaptive Multi-Agent Coordination System",
